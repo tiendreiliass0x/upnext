@@ -13,11 +13,17 @@ previews, and vote the queue into order.
 ## Local Setup
 
 1. Copy `.env.example` to `.env` and add R2 S3 credentials.
-2. Install dependencies with `npm install`.
-3. Start the app with `npm run dev`.
+2. Install dependencies with `bun install`.
+3. Start the app with `bun run dev`.
 
 SQLite defaults to `data/dj-booth.sqlite`. The directory and database are
 created automatically.
+
+bun is the package manager and `bun.lock` is the only lockfile. Node stays the
+runtime: `better-sqlite3` ships a Node-ABI native binding that bun's runtime
+refuses to load, so Next.js, Vitest and the cleanup script all execute under
+Node. `bun run <script>` is the right way to invoke them — it resolves the
+binary and spawns it under Node.
 
 ## Voting Identity
 
@@ -29,20 +35,20 @@ best-effort device limit until phone verification is added.
 
 ## Tests
 
-- `npm test` runs the isolated unit, API, component, R2-mock, and FFmpeg suites.
-- `npm run test:coverage` enforces the repository coverage baseline.
-- `npm run test:r2` runs the opt-in live R2 upload/download/delete check using
+- `bun run test` runs the isolated unit, API, component, R2-mock, and FFmpeg suites.
+- `bun run test:coverage` enforces the repository coverage baseline.
+- `bun run test:r2` runs the opt-in live R2 upload/download/delete check using
   the configured `.env` credentials.
 
 ## Cleanup
 
 Ended and expired rooms, their tracks and votes, and the R2 previews they held
-open are all reclaimed by `npm run cleanup`. Nothing removes them otherwise, so
+open are all reclaimed by `bun run cleanup`. Nothing removes them otherwise, so
 schedule it — an hourly cron entry or systemd timer next to the app process is
 enough:
 
 ```
-0 * * * * cd /srv/upnext && npm run cleanup >> /var/log/upnext-cleanup.log 2>&1
+0 * * * * cd /srv/upnext && bun run cleanup >> /var/log/upnext-cleanup.log 2>&1
 ```
 
 Retention is controlled by `CLEANUP_ROOM_RETENTION_HOURS` and

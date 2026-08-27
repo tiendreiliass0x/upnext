@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+# bun.lock is the only lockfile; npm's would drift silently beside it.
+package-lock.json
 /.pnp
 .pnp.*
 .yarn/*
