@@ -22,6 +22,49 @@ STATE_DIR="${UPNEXT_CLEANUP_STATE:-$HOME/Library/Application Support/com.upnext.
 # wrapper caps it. Two generations at 1 MB bounds this at ~2 MB.
 MAX_LOG_BYTES=${UPNEXT_CLEANUP_MAX_LOG_BYTES:-1048576}
 
+# Dead-man switch. Nothing self-hosted can report that this job stopped running
+# entirely, because when it stops, none of this code runs. An external monitor
+# inverts that: it alerts when an expected check-in does NOT arrive.
+#
+# Vendor-neutral on purpose. The base URL plus /start and /fail is the
+# healthchecks.io convention, which self-hosted Healthchecks, Cronitor and
+# Better Stack all accept. Unset means no network traffic at all.
+#
+# The URL is a credential: anyone holding it can forge check-ins, so it is read
+# from .env, never logged, and never printed by --status.
+read_dotenv() {
+  [ -f "$PROJECT_DIR/.env" ] || return 0
+  # Deliberately not `source`: .env is data, and sourcing it would execute it.
+  sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$PROJECT_DIR/.env" 2>/dev/null |
+    head -1 | sed -e 's/^"//' -e "s/^'//" -e 's/"$//' -e "s/'$//" -e 's/[[:space:]]*$//' |
+    tr -d '\r'
+}
+
+MONITOR_URL="${CLEANUP_MONITOR_URL:-$(read_dotenv CLEANUP_MONITOR_URL)}"
+
+redacted_monitor() {
+  # Host only. The path carries the secret.
+  printf '%s' "$MONITOR_URL" | sed -E 's#^([a-z]+://[^/]+).*#\1/***#'
+}
+
+ping_monitor() {
+  # $1 = url suffix ("", "/start", "/fail"), $2 = optional body file
+  [ -n "$MONITOR_URL" ] || return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  _url="$MONITOR_URL$1"
+  if [ -n "${2:-}" ] && [ -f "$2" ]; then
+    curl -fsS -m 10 --retry 3 --data-binary "@$2" "$_url" >/dev/null 2>&1 || _rc=$?
+  else
+    curl -fsS -m 10 --retry 3 "$_url" >/dev/null 2>&1 || _rc=$?
+  fi
+  if [ -n "${_rc:-}" ]; then
+    # A missed check-in is what the monitor is for, so this must never turn a
+    # successful cleanup into a failed one. Report it and carry on.
+    echo "upnext-cleanup: monitor check-in '$1' failed (curl $_rc) to $(redacted_monitor)" >&2
+    unset _rc
+  fi
+}
+
 log_bytes() {
   [ -f "$LOG_FILE" ] || { echo 0; return; }
   wc -c < "$LOG_FILE" | tr -d " "
@@ -75,6 +118,11 @@ if [ "${1:-}" = "--status" ]; then
   [ -f "$STATE_DIR/last-failure-reason" ] &&
     echo "               $(cat "$STATE_DIR/last-failure-reason")"
   echo "log          : $LOG_FILE ($(log_bytes) bytes, cap ${MAX_LOG_BYTES})"
+  if [ -n "$MONITOR_URL" ]; then
+    echo "monitor      : configured -> $(redacted_monitor)"
+  else
+    echo "monitor      : not configured (no dead-man switch)"
+  fi
   exit 0
 fi
 
@@ -125,6 +173,7 @@ if [ -z "$NODE_BIN" ]; then
   record last-failure "$(date +%s)"
   record last-failure-reason "no Node >= $MIN_MAJOR.$MIN_MINOR found"
   notify "UP/NEXT cleanup failed" "No Node >= $MIN_MAJOR.$MIN_MINOR found. Cleanup did not run."
+  ping_monitor "/fail"
   echo "upnext-cleanup: no Node >= $MIN_MAJOR.$MIN_MINOR found; cleanup did NOT run." >&2
   echo "  nvm default alias : ${TARGET:-<unset>}" >&2
   echo "  looked under      : $NVM_ROOT/versions/node" >&2
@@ -142,19 +191,33 @@ fi
 
 rotate_log
 cd "$PROJECT_DIR"
+ping_monitor "/start"
 
 # Deliberately not exec: the exit status has to be inspected so a failure can be
-# announced rather than left in a log nobody reads.
+# announced rather than left in a log nobody reads. Output is captured so the
+# summary can be attached to the check-in, then replayed to the log.
+OUT_FILE=$(mktemp "${TMPDIR:-/tmp}/upnext-cleanup.XXXXXX")
+trap 'rm -f "$OUT_FILE"' EXIT INT TERM
 set +e
-"$NODE_BIN" --env-file-if-exists=.env --import tsx scripts/cleanup.ts
+"$NODE_BIN" --env-file-if-exists=.env --import tsx scripts/cleanup.ts > "$OUT_FILE" 2>&1
 STATUS=$?
 set -e
+cat "$OUT_FILE"
 
 if [ "$STATUS" -eq 0 ]; then
   record last-success "$(date +%s)"
+  # The success summary is counts and booleans only, so it is safe to send.
+  ping_monitor "" "$OUT_FILE"
 else
   record last-failure "$(date +%s)"
   record last-failure-reason "cleanup exited $STATUS"
   notify "UP/NEXT cleanup failed" "Exit $STATUS. See $LOG_FILE"
+  # Failure output can carry stack traces with absolute paths, which would leak
+  # the username and layout to a third party. Opt in explicitly to send it.
+  if [ "${CLEANUP_MONITOR_SEND_OUTPUT:-0}" = "1" ]; then
+    ping_monitor "/fail" "$OUT_FILE"
+  else
+    ping_monitor "/fail"
+  fi
 fi
 exit "$STATUS"

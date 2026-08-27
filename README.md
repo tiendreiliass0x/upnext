@@ -74,7 +74,19 @@ if the agent is unloaded, no code of ours executes. Gap-alerting from a
 heartbeat was considered and rejected: an hourly job on a laptop legitimately
 misses every run during sleep, so it would fire every morning and be ignored.
 A true dead-man switch needs an external monitor that expects a periodic
-check-in.
+check-in, which is what `CLEANUP_MONITOR_URL` is for. Create a check at
+healthchecks.io, a self-hosted Healthchecks, Cronitor or Better Stack, and put
+its ping URL in `.env`. The wrapper hits `<url>/start` before the run, the base
+URL on success, and `<url>/fail` on failure — the convention all of those
+services accept. The monitor alerts when an expected check-in does not arrive,
+which is the one failure mode nothing on this machine can report.
+
+Unset, no request is made. A monitor that is unreachable logs a warning and
+never fails the run itself. The success check-in carries the summary, which is
+counts and booleans only; failure output is withheld unless
+`CLEANUP_MONITOR_SEND_OUTPUT=1`, since stack traces can carry absolute paths.
+The URL is a credential — it lives in `.env`, is never logged, and `--status`
+shows only its host.
 
 Retention is controlled by `CLEANUP_ROOM_RETENTION_HOURS` and
 `CLEANUP_UPLOAD_GRACE_HOURS` (the grace period covers a DJ who uploaded previews
