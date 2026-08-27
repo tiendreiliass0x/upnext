@@ -48,8 +48,16 @@ schedule it — an hourly cron entry or systemd timer next to the app process is
 enough:
 
 ```
-0 * * * * cd /srv/upnext && bun run cleanup >> /var/log/upnext-cleanup.log 2>&1
+0 * * * * /srv/upnext/scripts/run-cleanup.sh >> /var/log/upnext-cleanup.log 2>&1
 ```
+
+Schedule `scripts/run-cleanup.sh` rather than `bun run cleanup`. A scheduler
+gives the job a minimal PATH, so the wrapper resolves the interpreter itself:
+it reads nvm's default alias, refuses any Node older than 22.9 (the cleanup
+script passes `--env-file-if-exists`), and exits non-zero with a readable
+message instead of failing obscurely. `scripts/run-cleanup.sh --print-node`
+reports which interpreter a scheduled run would pick, without running the job.
+`bun run cleanup` remains the interactive entry point.
 
 Retention is controlled by `CLEANUP_ROOM_RETENTION_HOURS` and
 `CLEANUP_UPLOAD_GRACE_HOURS` (the grace period covers a DJ who uploaded previews
