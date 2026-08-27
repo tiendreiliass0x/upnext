@@ -1,0 +1,1878 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import {
+  ArrowRight,
+  ArrowUp,
+  AudioLines,
+  Check,
+  Copy,
+  Headphones,
+  ListMusic,
+  Pause,
+  Phone,
+  Play,
+  Plus,
+  QrCode,
+  Radio,
+  RotateCcw,
+  Share2,
+  Upload,
+  UserRound,
+  UsersRound,
+  X,
+} from "lucide-react";
+import QRCode from "react-qr-code";
+import type { PublicAccount } from "@/lib/accounts";
+import type { PublicSession, SessionTrack } from "@/lib/sessions";
+
+type AppView = "dj" | "guest";
+
+const accountTokenStorageKey = "upnext-account-token";
+const accountRequestStorageKey = "upnext-account-request-id";
+const voterIdStorageKey = "upnext-voter-id";
+const anonymousVotesStorageKey = "upnext-anonymous-votes";
+
+type DraftTrack = {
+  id: string;
+  title: string;
+  artist: string;
+  source: "demo" | "upload" | "playlist";
+  file?: File;
+  previewKey?: string;
+};
+
+const demoTracks: DraftTrack[] = [
+  {
+    id: "demo-1",
+    title: "NUEVAYoL",
+    artist: "Bad Bunny",
+    source: "demo",
+  },
+  {
+    id: "demo-2",
+    title: "Sticky",
+    artist: "Tyler, The Creator",
+    source: "demo",
+  },
+  {
+    id: "demo-3",
+    title: "Guess",
+    artist: "Charli xcx feat. Billie Eilish",
+    source: "demo",
+  },
+  {
+    id: "demo-4",
+    title: "Messy",
+    artist: "Lola Young",
+    source: "demo",
+  },
+  {
+    id: "demo-5",
+    title: "APT.",
+    artist: "ROSÉ & Bruno Mars",
+    source: "demo",
+  },
+];
+
+function createClientId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+      "",
+    );
+  }
+
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function isClientId(value: string | null): value is string {
+  return Boolean(
+    value &&
+      value.length >= 16 &&
+      value.length <= 100 &&
+      /^[A-Za-z0-9_-]+$/.test(value),
+  );
+}
+
+function getStoredAnonymousVote(sessionId: string) {
+  try {
+    const stored = window.localStorage.getItem(anonymousVotesStorageKey);
+    if (!stored) return null;
+    const votes = JSON.parse(stored) as Record<string, unknown>;
+    const trackId = votes[sessionId.toUpperCase()];
+    return typeof trackId === "string" ? trackId : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberAnonymousVote(sessionId: string, trackId: string) {
+  try {
+    const stored = window.localStorage.getItem(anonymousVotesStorageKey);
+    const votes = stored
+      ? (JSON.parse(stored) as Record<string, unknown>)
+      : {};
+    votes[sessionId.toUpperCase()] = trackId;
+    window.localStorage.setItem(anonymousVotesStorageKey, JSON.stringify(votes));
+  } catch {
+    // The server still enforces the anonymous vote limit when storage is blocked.
+  }
+}
+
+function forgetAnonymousVote(sessionId: string) {
+  try {
+    const stored = window.localStorage.getItem(anonymousVotesStorageKey);
+    if (!stored) return;
+    const votes = JSON.parse(stored) as Record<string, unknown>;
+    delete votes[sessionId.toUpperCase()];
+    window.localStorage.setItem(anonymousVotesStorageKey, JSON.stringify(votes));
+  } catch {
+    // The account token becomes the source of identity after onboarding.
+  }
+}
+
+function trackFromName(
+  name: string,
+  source: DraftTrack["source"],
+  file?: File,
+): DraftTrack {
+  const rawName = name.split("/").pop() ?? name;
+  let decodedName = rawName;
+  try {
+    decodedName = decodeURIComponent(rawName);
+  } catch {
+    // Local filenames can contain unmatched percent signs.
+  }
+  const cleanName = decodedName
+    .replace(/\.(mp3|wav|m4a|aac|flac|ogg|aiff?|opus)$/i, "")
+    .replace(/^\d{1,3}[. _-]+/, "")
+    .trim();
+  const separator = [" - ", " – ", " — "].find((item) =>
+    cleanName.includes(item),
+  );
+  const parts = separator ? cleanName.split(separator) : [cleanName];
+  const artist = parts.length > 1 ? parts.shift()?.trim() : "Unknown artist";
+  const title = parts.join(separator ?? " ").trim() || cleanName || "Untitled track";
+
+  return {
+    id: createClientId(),
+    title,
+    artist: artist || "Unknown artist",
+    source,
+    file,
+  };
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+function getGuestLink(sessionId: string) {
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("session", sessionId);
+  return url.toString();
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+  timeoutMs = 8000,
+) {
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (requestError) {
+    if (timedOut) throw new Error("The connection timed out.");
+    throw requestError;
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
+function disposeAudio(audio: HTMLAudioElement) {
+  audio.onended = null;
+  audio.onerror = null;
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+}
+
+export default function Dashboard({
+  initialSessionId = "",
+}: {
+  initialSessionId?: string;
+}) {
+  const sharedSessionId = initialSessionId.trim().toUpperCase().slice(0, 40);
+  const [view, setView] = useState<AppView>(sharedSessionId ? "guest" : "dj");
+  const [joinedViaLink, setJoinedViaLink] = useState(Boolean(sharedSessionId));
+  const [isLive, setIsLive] = useState(Boolean(sharedSessionId));
+  const [sessionName, setSessionName] = useState("Friday After Dark");
+  const [venue, setVenue] = useState("Room 02");
+  const [draftTracks, setDraftTracks] = useState<DraftTrack[]>(demoTracks);
+  const [session, setSession] = useState<PublicSession | null>(null);
+  const [activeSessionId, setActiveSessionId] = useState(sharedSessionId);
+  const [hostKey, setHostKey] = useState("");
+  const [sessionLink, setSessionLink] = useState("");
+  const [account, setAccount] = useState<PublicAccount | null>(null);
+  const [accountToken, setAccountToken] = useState("");
+  const [voterId, setVoterId] = useState("");
+  const [anonymousVoteUsed, setAnonymousVoteUsed] = useState(false);
+  const [identityRequested, setIdentityRequested] = useState(false);
+  const [pendingIdentityVote, setPendingIdentityVote] = useState("");
+  const [identityStatus, setIdentityStatus] = useState<
+    "loading" | "needed" | "ready"
+  >("loading");
+  const [votedTrackIds, setVotedTrackIds] = useState<Set<string>>(new Set());
+  const [pendingVotes, setPendingVotes] = useState<Set<string>>(new Set());
+  const [isDragging, setIsDragging] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+  const [isRecoveringHost, setIsRecoveringHost] = useState(
+    !Boolean(sharedSessionId),
+  );
+  const [isEnding, setIsEnding] = useState(false);
+  const [isLoadingSession, setIsLoadingSession] = useState(
+    Boolean(sharedSessionId),
+  );
+  const [roomMissing, setRoomMissing] = useState(false);
+  const [roomError, setRoomError] = useState("");
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState("");
+  const activeSessionIdRef = useRef(activeSessionId);
+  const accountRequestIdRef = useRef("");
+  const setupLockedRef = useRef(false);
+  const sessionRequestIdRef = useRef("");
+  const sessionRevisionRef = useRef<{ id: string; revision: number } | null>(
+    null,
+  );
+  const sessionTagRef = useRef<{ id: string; tag: string } | null>(null);
+  activeSessionIdRef.current = activeSessionId;
+
+  useEffect(() => {
+    let nextVoterId = createClientId();
+    try {
+      const savedVoterId = window.localStorage.getItem(voterIdStorageKey);
+      if (isClientId(savedVoterId)) {
+        nextVoterId = savedVoterId;
+      } else {
+        window.localStorage.setItem(voterIdStorageKey, nextVoterId);
+      }
+      nextVoterId =
+        window.localStorage.getItem(voterIdStorageKey) ?? nextVoterId;
+    } catch {
+      // An in-memory ID still allows voting for this tab.
+    }
+    setVoterId(nextVoterId);
+  }, []);
+
+  useEffect(() => {
+    setAnonymousVoteUsed(
+      Boolean(activeSessionId && getStoredAnonymousVote(activeSessionId)),
+    );
+  }, [activeSessionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let retryTimer: number | undefined;
+
+    async function restoreAccount() {
+      let savedToken = "";
+      try {
+        savedToken = window.localStorage.getItem(accountTokenStorageKey) ?? "";
+      } catch {
+        // The phone form remains available when storage is blocked.
+      }
+
+      if (!savedToken) {
+        if (!cancelled) setIdentityStatus("needed");
+        return;
+      }
+
+      try {
+        const response = await fetchWithTimeout("/api/accounts", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${savedToken}` },
+        });
+        const data = (await response.json()) as {
+          account?: PublicAccount;
+          error?: string;
+        };
+        if (response.status === 401) {
+          try {
+            window.localStorage.removeItem(accountTokenStorageKey);
+          } catch {
+            // The expired token can also be replaced in memory.
+          }
+          if (!cancelled) setIdentityStatus("needed");
+          return;
+        }
+        if (!response.ok || !data.account) {
+          throw new Error(data.error || "Your profile could not be loaded.");
+        }
+
+        if (!cancelled) {
+          setAccount(data.account);
+          setAccountToken(savedToken);
+          setIdentityStatus("ready");
+        }
+      } catch {
+        if (!cancelled) {
+          retryTimer = window.setTimeout(restoreAccount, 2000);
+        }
+      }
+    }
+
+    void restoreAccount();
+    return () => {
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (
+      identityStatus !== "ready" ||
+      !accountToken ||
+      sharedSessionId
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    async function restoreHostRoom() {
+      try {
+        const response = await fetchWithTimeout("/api/sessions", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accountToken}` },
+        });
+        const data = (await response.json()) as {
+          activeRoom?: { session: PublicSession; hostKey: string } | null;
+        };
+        if (!response.ok || !data.activeRoom || cancelled) return;
+
+        sessionRevisionRef.current = {
+          id: data.activeRoom.session.id,
+          revision: data.activeRoom.session.revision,
+        };
+        setSession(data.activeRoom.session);
+        setActiveSessionId(data.activeRoom.session.id);
+        setHostKey(data.activeRoom.hostKey);
+        setIsLive(true);
+        setIsLoadingSession(false);
+      } catch {
+        // A failed recovery should not block creating a new room.
+      } finally {
+        if (!cancelled) setIsRecoveringHost(false);
+      }
+    }
+
+    void restoreHostRoom();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountToken, identityStatus, sharedSessionId]);
+
+  useEffect(() => {
+    if (!activeSessionId || identityStatus === "loading" || !voterId) return;
+
+    setSessionLink(getGuestLink(activeSessionId));
+
+    let cancelled = false;
+    let refreshTimer: number | undefined;
+
+    async function refreshSession() {
+      let shouldContinue = true;
+      try {
+        const knownTag = sessionTagRef.current;
+        const response = await fetchWithTimeout(
+          `/api/sessions/${encodeURIComponent(activeSessionId)}`,
+          {
+            cache: "no-store",
+            headers: {
+              ...(accountToken
+                ? { Authorization: `Bearer ${accountToken}` }
+                : { "x-upnext-voter-id": voterId }),
+              ...(knownTag && knownTag.id === activeSessionId
+                ? { "If-None-Match": knownTag.tag }
+                : {}),
+            },
+          },
+        );
+
+        // The room is unchanged, so there is no body to read and no state to
+        // replace. Skipping the update also avoids a re-render on every poll.
+        if (response.status === 304) {
+          if (!cancelled) {
+            setRoomMissing(false);
+            setRoomError("");
+            setIsLoadingSession(false);
+          }
+          return;
+        }
+
+        const data = (await response.json()) as {
+          session?: PublicSession;
+          error?: string;
+        };
+
+        if (response.status === 404) {
+          shouldContinue = false;
+          if (!cancelled) {
+            sessionRevisionRef.current = null;
+            sessionTagRef.current = null;
+            setSession(null);
+            setRoomMissing(true);
+            setRoomError(data.error || "This room is no longer live.");
+            setIsLoadingSession(false);
+          }
+          return;
+        }
+
+        if (!response.ok || !data.session) {
+          throw new Error(data.error || "This room could not be loaded.");
+        }
+
+        if (!cancelled) {
+          const nextSession = data.session;
+          const responseTag = response.headers.get("etag");
+          sessionTagRef.current = responseTag
+            ? { id: nextSession.id, tag: responseTag }
+            : null;
+          const latestRevision = sessionRevisionRef.current;
+          if (
+            !latestRevision ||
+            latestRevision.id !== nextSession.id ||
+            latestRevision.revision <= nextSession.revision
+          ) {
+            sessionRevisionRef.current = {
+              id: nextSession.id,
+              revision: nextSession.revision,
+            };
+            setSession(nextSession);
+            setVotedTrackIds(new Set(nextSession.votedTrackIds));
+            if (!accountToken) {
+              setAnonymousVoteUsed(nextSession.anonymousVoteUsed);
+              if (nextSession.votedTrackIds.length > 0) {
+                rememberAnonymousVote(
+                  nextSession.id,
+                  nextSession.votedTrackIds[0],
+                );
+              } else if (!nextSession.anonymousVoteUsed) {
+                forgetAnonymousVote(nextSession.id);
+              }
+            }
+          }
+          setRoomMissing(false);
+          setRoomError("");
+          setIsLoadingSession(false);
+        }
+      } catch (refreshError) {
+        if (!cancelled) {
+          setRoomError(getErrorMessage(refreshError));
+          setIsLoadingSession(false);
+        }
+      } finally {
+        if (!cancelled && shouldContinue) {
+          refreshTimer = window.setTimeout(refreshSession, 2000);
+        }
+      }
+    }
+
+    void refreshSession();
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer) window.clearTimeout(refreshTimer);
+    };
+  }, [accountToken, activeSessionId, identityStatus, voterId]);
+
+  async function finishIdentity(data: {
+    account: PublicAccount;
+    token: string;
+  }) {
+    setAccount(data.account);
+    setAccountToken(data.token);
+    setIdentityStatus("ready");
+    setIdentityRequested(false);
+    setAnonymousVoteUsed(false);
+    try {
+      window.localStorage.setItem(accountTokenStorageKey, data.token);
+      window.localStorage.removeItem(accountRequestStorageKey);
+    } catch {
+      // The profile remains active for this tab.
+    }
+    accountRequestIdRef.current = "";
+    if (activeSessionId) forgetAnonymousVote(activeSessionId);
+
+    const nextTrackId = pendingIdentityVote;
+    setPendingIdentityVote("");
+    if (nextTrackId) await submitVote(nextTrackId, data.token);
+  }
+
+  async function saveIdentity(phone: string, pseudonym: string) {
+    if (!accountRequestIdRef.current) {
+      try {
+        const savedRequestId = window.localStorage.getItem(
+          accountRequestStorageKey,
+        );
+        accountRequestIdRef.current = isClientId(savedRequestId)
+          ? savedRequestId
+          : createClientId();
+        window.localStorage.setItem(
+          accountRequestStorageKey,
+          accountRequestIdRef.current,
+        );
+      } catch {
+        accountRequestIdRef.current = createClientId();
+      }
+    }
+    const response = await fetchWithTimeout("/api/accounts", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(voterId ? { "x-upnext-voter-id": voterId } : {}),
+      },
+      body: JSON.stringify({
+        phone,
+        pseudonym,
+        requestId: accountRequestIdRef.current,
+      }),
+    });
+    const data = (await response.json()) as {
+      account?: PublicAccount;
+      token?: string;
+      error?: string;
+    };
+
+    if (!response.ok || !data.account || !data.token) {
+      throw new Error(data.error || "Your profile could not be saved.");
+    }
+
+    await finishIdentity({ account: data.account, token: data.token });
+  }
+
+  async function loginIdentity(phone: string) {
+    const response = await fetchWithTimeout("/api/accounts/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(voterId ? { "x-upnext-voter-id": voterId } : {}),
+      },
+      body: JSON.stringify({ phone }),
+    });
+    const data = (await response.json()) as {
+      account?: PublicAccount;
+      token?: string;
+      error?: string;
+    };
+
+    if (!response.ok || !data.account || !data.token) {
+      throw new Error(data.error || "Your account could not be logged in.");
+    }
+
+    await finishIdentity({ account: data.account, token: data.token });
+  }
+
+  async function addFiles(files: FileList | File[]) {
+    if (setupLockedRef.current) return;
+    const fileList = Array.from(files);
+    if (fileList.length === 0) return;
+
+    const incoming: DraftTrack[] = [];
+
+    try {
+      for (const file of fileList) {
+        if (/\.(m3u8?|txt)$/i.test(file.name)) {
+          const lines = (await file.text())
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter((line) => line && !line.startsWith("#"));
+          incoming.push(
+            ...lines.map((line) => trackFromName(line, "playlist")),
+          );
+        } else {
+          incoming.push(trackFromName(file.name, "upload", file));
+        }
+      }
+    } catch {
+      setError("That playlist could not be read. Try the audio files directly.");
+      return;
+    }
+
+    if (setupLockedRef.current) return;
+    setDraftTracks((current) => {
+      const base = current.every((track) => track.source === "demo")
+        ? []
+        : current;
+      const knownTracks = new Set(
+        base.map((track) => `${track.artist}-${track.title}`.toLowerCase()),
+      );
+      const uniqueIncoming = incoming.filter((track) => {
+        const key = `${track.artist}-${track.title}`.toLowerCase();
+        if (knownTracks.has(key)) return false;
+        knownTracks.add(key);
+        return true;
+      });
+
+      return [...base, ...uniqueIncoming].slice(0, 200);
+    });
+    setError("");
+  }
+
+  async function startSession() {
+    if (setupLockedRef.current) return;
+    if (!accountToken) {
+      setError("Sign in before opening a room.");
+      return;
+    }
+    if (!sessionName.trim() || draftTracks.length === 0) {
+      setError("Add a session name and at least one track.");
+      return;
+    }
+
+    setupLockedRef.current = true;
+    setIsStarting(true);
+    setError("");
+
+    try {
+      let preparedTracks = [...draftTracks];
+      const tracksToUpload = preparedTracks.filter(
+        (track) => track.file && !track.previewKey,
+      );
+
+      for (let index = 0; index < tracksToUpload.length; index += 1) {
+        const track = tracksToUpload[index];
+        if (!track.file) continue;
+        setUploadProgress(
+          `Creating preview ${index + 1} of ${tracksToUpload.length}`,
+        );
+        const formData = new FormData();
+        formData.append("file", track.file);
+        const uploadResponse = await fetchWithTimeout(
+          "/api/uploads",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accountToken}`,
+              "x-upnext-upload-id": track.id,
+            },
+            body: formData,
+          },
+          5 * 60_000,
+        );
+        const uploadData = (await uploadResponse.json()) as {
+          previewKey?: string;
+          error?: string;
+        };
+        if (!uploadResponse.ok || !uploadData.previewKey) {
+          throw new Error(
+            uploadData.error || `A preview for ${track.title} could not be created.`,
+          );
+        }
+
+        preparedTracks = preparedTracks.map((item) =>
+          item.id === track.id
+            ? { ...item, previewKey: uploadData.previewKey }
+            : item,
+        );
+        setDraftTracks(preparedTracks);
+      }
+
+      setUploadProgress("Opening live room");
+      if (!sessionRequestIdRef.current) {
+        sessionRequestIdRef.current = createClientId();
+      }
+      const response = await fetchWithTimeout("/api/sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accountToken}`,
+        },
+        body: JSON.stringify({
+          name: sessionName,
+          venue,
+          requestId: sessionRequestIdRef.current,
+          tracks: preparedTracks.map(({ title, artist, previewKey }) => ({
+            title,
+            artist,
+            previewKey,
+          })),
+        }),
+      });
+      const data = (await response.json()) as {
+        session?: PublicSession;
+        hostKey?: string;
+        error?: string;
+      };
+
+      if (!response.ok || !data.session || !data.hostKey) {
+        throw new Error(data.error || "The room could not be opened.");
+      }
+
+      const guestLink = getGuestLink(data.session.id);
+      sessionRevisionRef.current = {
+        id: data.session.id,
+        revision: data.session.revision,
+      };
+      setSession(data.session);
+      sessionRequestIdRef.current = "";
+      setActiveSessionId(data.session.id);
+      setHostKey(data.hostKey);
+      setSessionLink(guestLink);
+      setIsLive(true);
+      setRoomMissing(false);
+      setRoomError("");
+    } catch (startError) {
+      setError(getErrorMessage(startError));
+    } finally {
+      setupLockedRef.current = false;
+      setIsStarting(false);
+      setUploadProgress("");
+    }
+  }
+
+  async function submitVote(trackId: string, credential = accountToken) {
+    if (!activeSessionId || !voterId || pendingVotes.has(trackId)) return;
+
+    const votingSessionId = activeSessionId;
+    setPendingVotes((current) => new Set(current).add(trackId));
+    setError("");
+
+    try {
+      const response = await fetchWithTimeout(
+        `/api/sessions/${encodeURIComponent(votingSessionId)}/vote`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(credential
+              ? { Authorization: `Bearer ${credential}` }
+              : { "x-upnext-voter-id": voterId }),
+          },
+          body: JSON.stringify({
+            trackId,
+            enabled: !votedTrackIds.has(trackId),
+          }),
+        },
+      );
+      const data = (await response.json()) as {
+        session?: PublicSession;
+        voted?: boolean;
+        error?: string;
+        code?: string;
+      };
+
+      if (
+        !credential &&
+        response.status === 403 &&
+        data.code === "PHONE_REQUIRED"
+      ) {
+        setPendingIdentityVote(trackId);
+        setIdentityRequested(true);
+        return;
+      }
+
+      if (!response.ok || !data.session || typeof data.voted !== "boolean") {
+        throw new Error(data.error || "Your vote could not be saved.");
+      }
+
+      if (activeSessionIdRef.current !== votingSessionId) return;
+
+      const nextSession = data.session;
+      const latestRevision = sessionRevisionRef.current;
+      if (
+        !latestRevision ||
+        latestRevision.id !== nextSession.id ||
+        latestRevision.revision <= nextSession.revision
+      ) {
+        sessionRevisionRef.current = {
+          id: nextSession.id,
+          revision: nextSession.revision,
+        };
+        setSession(nextSession);
+        setVotedTrackIds(new Set(nextSession.votedTrackIds));
+      }
+      if (!credential) {
+        rememberAnonymousVote(votingSessionId, trackId);
+        setAnonymousVoteUsed(true);
+      }
+      setRoomError("");
+    } catch (voteError) {
+      setError(getErrorMessage(voteError));
+    } finally {
+      setPendingVotes((current) => {
+        const next = new Set(current);
+        next.delete(trackId);
+        return next;
+      });
+    }
+  }
+
+  async function voteForTrack(trackId: string) {
+    if (!accountToken && anonymousVoteUsed) {
+      setPendingIdentityVote(trackId);
+      setIdentityRequested(true);
+      return;
+    }
+    await submitVote(trackId);
+  }
+
+  async function copySessionLink() {
+    if (!sessionLink) return;
+
+    try {
+      await navigator.clipboard.writeText(sessionLink);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1800);
+    } catch {
+      setError("Copying failed. Select the room link manually.");
+    }
+  }
+
+  function clearActiveSession() {
+    sessionRevisionRef.current = null;
+    sessionTagRef.current = null;
+    sessionRequestIdRef.current = "";
+    setSession(null);
+    setActiveSessionId("");
+    setHostKey("");
+    setSessionLink("");
+    setIsLive(false);
+    setView("dj");
+    setJoinedViaLink(false);
+    setVotedTrackIds(new Set());
+    setRoomMissing(false);
+    setRoomError("");
+    setError("");
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+
+  async function endCurrentSession() {
+    if (!activeSessionId || !hostKey || isEnding) return;
+
+    setIsEnding(true);
+    setError("");
+    try {
+      const response = await fetchWithTimeout(
+        `/api/sessions/${encodeURIComponent(activeSessionId)}`,
+        {
+          method: "DELETE",
+          headers: {
+            "x-upnext-host-key": hostKey,
+            Authorization: `Bearer ${accountToken}`,
+          },
+        },
+      );
+      const data = (await response.json()) as { error?: string };
+
+      if (!response.ok && response.status !== 404) {
+        throw new Error(data.error || "The room could not be ended.");
+      }
+
+      clearActiveSession();
+    } catch (endError) {
+      setError(getErrorMessage(endError));
+    } finally {
+      setIsEnding(false);
+    }
+  }
+
+  if (identityStatus === "loading" || !voterId) {
+    return (
+      <div className="upnext-app">
+        <header className="app-header">
+          <span className="wordmark">
+            <span className="wordmark-dot" aria-hidden="true" />
+            UP/NEXT
+          </span>
+        </header>
+        <LoadingRoom label="Loading your profile" />
+      </div>
+    );
+  }
+
+  if (
+    (identityStatus === "needed" || !account) &&
+    (!sharedSessionId || identityRequested)
+  ) {
+    return (
+      <div className="upnext-app">
+        <header className="app-header">
+          <span className="wordmark">
+            <span className="wordmark-dot" aria-hidden="true" />
+            UP/NEXT
+          </span>
+          {sharedSessionId && (
+            <span className="guest-header-room">
+              <Radio size={14} /> Room {sharedSessionId}
+            </span>
+          )}
+        </header>
+        <IdentityGate
+          joiningRoom={Boolean(sharedSessionId)}
+          afterFreeVote={identityRequested}
+          onSave={saveIdentity}
+          onLogin={loginIdentity}
+        />
+      </div>
+    );
+  }
+
+  const previewSession: PublicSession = {
+    id: "PREVIEW",
+    name: sessionName || "Untitled session",
+    venue,
+    createdAt: "",
+    revision: 0,
+    totalVotes: 0,
+    guestCount: 0,
+    votedTrackIds: [],
+    anonymousVoteUsed: false,
+    tracks: draftTracks.map((track, position) => ({
+      id: track.id,
+      title: track.title,
+      artist: track.artist,
+      votes: 0,
+      position,
+      previewUrl: null,
+    })),
+  };
+  const visibleError = error || roomError;
+
+  return (
+    <div className="upnext-app">
+      <header className="app-header">
+        <button
+          type="button"
+          className="wordmark"
+          onClick={() => setView("dj")}
+          disabled={joinedViaLink}
+          aria-label="Open DJ booth"
+        >
+          <span className="wordmark-dot" aria-hidden="true" />
+          UP/NEXT
+        </button>
+
+        <div className="header-actions">
+          {joinedViaLink ? (
+            <span className="guest-header-room">
+              <Radio size={14} /> Room {activeSessionId}
+            </span>
+          ) : (
+            <nav className="view-switcher" aria-label="Choose app view">
+              <button
+                type="button"
+                className={view === "dj" ? "is-active" : ""}
+                onClick={() => setView("dj")}
+                aria-pressed={view === "dj"}
+              >
+                <Headphones size={16} strokeWidth={2} />
+                DJ booth
+              </button>
+              <button
+                type="button"
+                className={view === "guest" ? "is-active" : ""}
+                onClick={() => setView("guest")}
+                aria-pressed={view === "guest"}
+              >
+                <UsersRound size={16} strokeWidth={2} />
+                Crowd view
+              </button>
+            </nav>
+          )}
+          {account ? (
+            <span
+              className="profile-chip"
+              title={`Signed in as ${account.pseudonym}, phone ending ${account.phoneLast4}`}
+            >
+              <span>{account.pseudonym.slice(0, 1).toUpperCase()}</span>
+              <strong>{account.pseudonym}</strong>
+            </span>
+          ) : (
+            <span className="profile-chip" title="Anonymous browser voter">
+              <span>{anonymousVoteUsed ? "1" : "0"}</span>
+              <strong>{anonymousVoteUsed ? "Vote saved" : "Free vote"}</strong>
+            </span>
+          )}
+        </div>
+      </header>
+
+      {visibleError && (
+        <div className="error-banner" role="alert">
+          <span>{visibleError}</span>
+          <button
+            type="button"
+            onClick={() => {
+              setError("");
+              setRoomError("");
+            }}
+            aria-label="Dismiss"
+          >
+            <X size={18} />
+          </button>
+        </div>
+      )}
+
+      {view === "dj" && !isLive && (
+        isRecoveringHost ? (
+          <LoadingRoom label="Checking your live rooms" />
+        ) : (
+          <DJSetup
+          sessionName={sessionName}
+          venue={venue}
+          tracks={draftTracks}
+          isDragging={isDragging}
+          isStarting={isStarting}
+          uploadProgress={uploadProgress}
+          onSessionNameChange={setSessionName}
+          onVenueChange={setVenue}
+          onAddFiles={addFiles}
+          onDragChange={setIsDragging}
+          onRemoveTrack={(trackId) =>
+            !isStarting &&
+            setDraftTracks((current) =>
+              current.filter((track) => track.id !== trackId),
+            )
+          }
+          onClear={() => !isStarting && setDraftTracks([])}
+          onRestoreDemo={() => !isStarting && setDraftTracks(demoTracks)}
+          onStart={startSession}
+          />
+        )
+      )}
+
+      {view === "dj" && isLive && roomMissing && (
+        <MissingRoom isHost onReset={clearActiveSession} />
+      )}
+
+      {view === "dj" && isLive && !roomMissing && !session && !isLoadingSession && (
+        <ConnectionRoom />
+      )}
+
+      {view === "dj" && isLive && !roomMissing && (session || isLoadingSession) && (
+        <DJLiveRoom
+          session={session}
+          sessionLink={sessionLink}
+          copied={copied}
+          isLoading={isLoadingSession}
+          isEnding={isEnding}
+          onCopy={copySessionLink}
+          onOpenGuest={() => setView("guest")}
+          onEnd={() => void endCurrentSession()}
+        />
+      )}
+
+      {view === "guest" && roomMissing && (
+        <MissingRoom />
+      )}
+
+      {view === "guest" && activeSessionId && !roomMissing && !session && isLoadingSession && (
+        <LoadingRoom label="Joining the room" />
+      )}
+
+      {view === "guest" && activeSessionId && !roomMissing && !session && !isLoadingSession && (
+        <ConnectionRoom />
+      )}
+
+      {view === "guest" && !roomMissing && (!activeSessionId || session) && (
+        <GuestRoom
+          session={session ?? previewSession}
+          isPreview={!activeSessionId}
+          isLoading={isLoadingSession}
+          votedTrackIds={votedTrackIds}
+          pendingVotes={pendingVotes}
+          isAnonymous={!accountToken}
+          anonymousVoteUsed={anonymousVoteUsed}
+          onVote={voteForTrack}
+          onBackToDJ={() => setView("dj")}
+        />
+      )}
+    </div>
+  );
+}
+
+type DJSetupProps = {
+  sessionName: string;
+  venue: string;
+  tracks: DraftTrack[];
+  isDragging: boolean;
+  isStarting: boolean;
+  uploadProgress: string;
+  onSessionNameChange: (value: string) => void;
+  onVenueChange: (value: string) => void;
+  onAddFiles: (files: FileList | File[]) => Promise<void>;
+  onDragChange: (value: boolean) => void;
+  onRemoveTrack: (trackId: string) => void;
+  onClear: () => void;
+  onRestoreDemo: () => void;
+  onStart: () => void;
+};
+
+function DJSetup({
+  sessionName,
+  venue,
+  tracks,
+  isDragging,
+  isStarting,
+  uploadProgress,
+  onSessionNameChange,
+  onVenueChange,
+  onAddFiles,
+  onDragChange,
+  onRemoveTrack,
+  onClear,
+  onRestoreDemo,
+  onStart,
+}: DJSetupProps) {
+  return (
+    <main className="setup-page page-shell">
+      <section className="setup-hero">
+        <div>
+          <span className="eyebrow">
+            <Radio size={14} /> Set up the room
+          </span>
+          <h1>
+            Build the room.
+            <span>Let the crowd move it.</span>
+          </h1>
+        </div>
+        <p>
+          Add your set, open a live room, and let every phone shape what plays
+          next.
+        </p>
+      </section>
+
+      <div className="setup-grid">
+        <div className="setup-main">
+          <section className="form-section" aria-labelledby="room-details-title">
+            <div className="section-number">01</div>
+            <div className="section-content">
+              <div className="section-heading">
+                <h2 id="room-details-title">Name the night</h2>
+                <p>This is what guests see after they scan.</p>
+              </div>
+              <div className="field-grid">
+                <label className="field">
+                  <span>Session name</span>
+                  <input
+                    type="text"
+                    value={sessionName}
+                    maxLength={80}
+                    disabled={isStarting}
+                    onChange={(event) => onSessionNameChange(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Location <small>optional</small></span>
+                  <input
+                    type="text"
+                    value={venue}
+                    maxLength={80}
+                    disabled={isStarting}
+                    onChange={(event) => onVenueChange(event.target.value)}
+                  />
+                </label>
+              </div>
+            </div>
+          </section>
+
+          <section className="form-section" aria-labelledby="music-title">
+            <div className="section-number">02</div>
+            <div className="section-content">
+              <div className="section-heading track-heading">
+                <div>
+                  <h2 id="music-title">Add the music</h2>
+                  <p>Audio files include a private 30-second preview.</p>
+                </div>
+                {tracks.length > 0 && (
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={onClear}
+                    disabled={isStarting}
+                  >
+                    Clear all
+                  </button>
+                )}
+              </div>
+
+              <label
+                className={`upload-zone ${isDragging ? "is-dragging" : ""} ${isStarting ? "is-disabled" : ""}`}
+                onDragEnter={(event) => {
+                  event.preventDefault();
+                  if (isStarting) return;
+                  onDragChange(true);
+                }}
+                onDragOver={(event) => event.preventDefault()}
+                onDragLeave={() => onDragChange(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  if (isStarting) return;
+                  onDragChange(false);
+                  void onAddFiles(event.dataTransfer.files);
+                }}
+              >
+                <input
+                  type="file"
+                  multiple
+                  disabled={isStarting}
+                  accept="audio/*,.m3u,.m3u8,.txt"
+                  onChange={(event) => {
+                    if (event.target.files) void onAddFiles(event.target.files);
+                    event.target.value = "";
+                  }}
+                />
+                <span className="upload-icon">
+                  <Upload size={24} strokeWidth={1.8} />
+                </span>
+                <span className="upload-copy">
+                  <strong>Choose files</strong> or drop them here
+                  <small>MP3, WAV, M4A, FLAC · snippets upload on start</small>
+                </span>
+                <span className="upload-action">
+                  <Plus size={18} /> Add tracks
+                </span>
+              </label>
+
+              {tracks.length > 0 ? (
+                <div className="draft-list">
+                  <div className="draft-list-meta">
+                    <span>{tracks.length} tracks ready</span>
+                    <span>Crowd ranking enabled</span>
+                  </div>
+                  <ol>
+                    {tracks.map((track, index) => (
+                      <li key={track.id}>
+                        <span className="track-index">
+                          {String(index + 1).padStart(2, "0")}
+                        </span>
+                        <span className="track-copy">
+                          <strong>{track.title}</strong>
+                          <small>{track.artist}</small>
+                          <span className="preview-status">
+                            {track.previewKey
+                              ? "Preview ready"
+                              : track.file
+                                ? "30-sec preview queued"
+                                : "Voting only"}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          className="remove-track"
+                          onClick={() => onRemoveTrack(track.id)}
+                          disabled={isStarting}
+                          aria-label={`Remove ${track.title}`}
+                        >
+                          <X size={18} />
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ) : (
+                <div className="empty-tracks">
+                  <ListMusic size={26} strokeWidth={1.6} />
+                  <div>
+                    <strong>Your set is empty</strong>
+                    <p>Add files above or restore the example playlist.</p>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={onRestoreDemo}
+                    disabled={isStarting}
+                  >
+                    Restore demo
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+
+        <aside className="launch-panel">
+          <div className="launch-art" aria-hidden="true">
+            <span>UP</span>
+            <AudioLines size={54} strokeWidth={1.3} />
+            <span>NEXT</span>
+          </div>
+          <div className="launch-copy">
+            <span className="status-line">
+              <span /> Ready when you are
+            </span>
+            <h2>{sessionName || "Your next session"}</h2>
+            <p>
+              {tracks.length} {tracks.length === 1 ? "track" : "tracks"}
+              {venue ? ` · ${venue}` : ""}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="primary-button launch-button"
+            onClick={onStart}
+            disabled={isStarting || tracks.length === 0 || !sessionName.trim()}
+          >
+            <span>
+              {isStarting ? uploadProgress || "Opening room..." : "Start session"}
+            </span>
+            <ArrowRight size={20} />
+          </button>
+          <small className="launch-note">
+            Preview audio is stored privately in R2.
+          </small>
+        </aside>
+      </div>
+    </main>
+  );
+}
+
+type DJLiveRoomProps = {
+  session: PublicSession | null;
+  sessionLink: string;
+  copied: boolean;
+  isLoading: boolean;
+  isEnding: boolean;
+  onCopy: () => void;
+  onOpenGuest: () => void;
+  onEnd: () => void;
+};
+
+function DJLiveRoom({
+  session,
+  sessionLink,
+  copied,
+  isLoading,
+  isEnding,
+  onCopy,
+  onOpenGuest,
+  onEnd,
+}: DJLiveRoomProps) {
+  if (isLoading || !session || !sessionLink) {
+    return <LoadingRoom label="Opening the room" />;
+  }
+
+  return (
+    <main className="live-page page-shell">
+      <section className="live-heading">
+        <div>
+          <span className="live-pill"><span /> Live session</span>
+          <h1>{session.name}</h1>
+          <p>{session.venue || "Location not set"} · Code {session.id}</p>
+        </div>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={onEnd}
+          disabled={isEnding}
+        >
+          <RotateCcw size={17} /> {isEnding ? "Ending..." : "End session"}
+        </button>
+      </section>
+
+      <div className="live-grid">
+        <section className="share-panel" aria-labelledby="share-title">
+          <div className="share-copy">
+            <span className="eyebrow"><QrCode size={14} /> Invite the crowd</span>
+            <h2 id="share-title">Scan. Vote. Move the queue.</h2>
+            <p>Put this QR on a screen or send the guest room link.</p>
+          </div>
+          <div className="qr-frame">
+            <QRCode
+              value={sessionLink}
+              size={168}
+              bgColor="#ffffff"
+              fgColor="#161711"
+              level="M"
+            />
+          </div>
+          <div className="room-code">
+            <span>Room code</span>
+            <strong>{session.id}</strong>
+          </div>
+          <button type="button" className="primary-button" onClick={onCopy}>
+            {copied ? <Check size={18} /> : <Copy size={18} />}
+            {copied ? "Link copied" : "Copy guest link"}
+          </button>
+          <input
+            className="share-url"
+            value={sessionLink}
+            readOnly
+            aria-label="Guest room link"
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <button type="button" className="preview-link" onClick={onOpenGuest}>
+            Preview crowd view <ArrowRight size={16} />
+          </button>
+        </section>
+
+        <section className="queue-panel" aria-labelledby="live-queue-title">
+          <div className="queue-header">
+            <div>
+              <span>Live ranking</span>
+              <h2 id="live-queue-title">Crowd queue</h2>
+            </div>
+            <div className="live-stats">
+              <span><strong>{session.guestCount}</strong> voters</span>
+              <span><strong>{session.totalVotes}</strong> votes</span>
+            </div>
+          </div>
+          <QueueList tracks={session.tracks} />
+        </section>
+      </div>
+    </main>
+  );
+}
+
+type GuestRoomProps = {
+  session: PublicSession;
+  isPreview: boolean;
+  isLoading: boolean;
+  votedTrackIds: Set<string>;
+  pendingVotes: Set<string>;
+  isAnonymous: boolean;
+  anonymousVoteUsed: boolean;
+  onVote: (trackId: string) => void;
+  onBackToDJ: () => void;
+};
+
+function GuestRoom({
+  session,
+  isPreview,
+  isLoading,
+  votedTrackIds,
+  pendingVotes,
+  isAnonymous,
+  anonymousVoteUsed,
+  onVote,
+  onBackToDJ,
+}: GuestRoomProps) {
+  if (isLoading) return <LoadingRoom label="Joining the room" />;
+
+  const topTrack = session.tracks[0];
+
+  return (
+    <main className="guest-page page-shell">
+      <section className="guest-heading">
+        <div>
+          <span className={isPreview ? "preview-pill" : "live-pill"}>
+            <span /> {isPreview ? "Crowd preview" : `Live · ${session.id}`}
+          </span>
+          <h1>{session.name}</h1>
+          <p>
+            {isPreview
+              ? "This is what guests see after scanning your QR."
+              : isAnonymous
+                ? anonymousVoteUsed
+                  ? "Your free vote is saved. Add your phone when you want another pick."
+                  : "Your first vote is free. We only ask for your phone when you vote again."
+                : "Vote for the tracks you want to hear. Tap again to undo."}
+          </p>
+        </div>
+        {isPreview && (
+          <button type="button" className="secondary-button" onClick={onBackToDJ}>
+            Back to setup
+          </button>
+        )}
+      </section>
+      <p className="vote-announcement" aria-live="polite" aria-atomic="true">
+        {session.totalVotes} total votes.
+        {topTrack ? ` ${topTrack.title} is ranked first.` : ""}
+      </p>
+
+      {topTrack && (
+        <section className="top-pick">
+          <div className="top-pick-label">
+            <AudioLines size={19} />
+            {session.totalVotes > 0 ? "Crowd pick" : "First in queue"}
+          </div>
+          <div className="top-pick-copy">
+            <strong>{topTrack.title}</strong>
+            <span>{topTrack.artist}</span>
+          </div>
+          <div className="top-pick-votes">
+            <ArrowUp size={17} /> {topTrack.votes}
+          </div>
+        </section>
+      )}
+
+      <section className="guest-ballot" aria-labelledby="ballot-title">
+        <div className="guest-ballot-heading">
+          <div>
+            <span>Up next</span>
+            <h2 id="ballot-title">Make your picks</h2>
+          </div>
+          <span className="track-count">{session.tracks.length} tracks</span>
+        </div>
+
+        {session.tracks.length > 0 ? (
+          <QueueList
+            tracks={session.tracks}
+            interactive={!isPreview}
+            votedTrackIds={votedTrackIds}
+            pendingVotes={pendingVotes}
+            lockSelectedVotes={isAnonymous}
+            onVote={onVote}
+          />
+        ) : (
+          <div className="empty-ballot">
+            <ListMusic size={30} strokeWidth={1.5} />
+            <strong>No tracks in this room yet</strong>
+          </div>
+        )}
+      </section>
+
+      <p className="guest-note">
+        <Share2 size={15} /> {isAnonymous
+          ? "One free vote per room. Add your phone to keep voting."
+          : "Tap once per track. The most-voted track stays on top."}
+      </p>
+    </main>
+  );
+}
+
+type QueueListProps = {
+  tracks: SessionTrack[];
+  interactive?: boolean;
+  votedTrackIds?: Set<string>;
+  pendingVotes?: Set<string>;
+  lockSelectedVotes?: boolean;
+  onVote?: (trackId: string) => void;
+};
+
+export function QueueList({
+  tracks,
+  interactive = false,
+  votedTrackIds = new Set(),
+  pendingVotes = new Set(),
+  lockSelectedVotes = false,
+  onVote,
+}: QueueListProps) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playingTrackId, setPlayingTrackId] = useState("");
+  const [loadingTrackId, setLoadingTrackId] = useState("");
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) disposeAudio(audioRef.current);
+      audioRef.current = null;
+    };
+  }, []);
+
+  async function togglePreview(track: SessionTrack) {
+    if (!track.previewUrl) return;
+
+    if (playingTrackId === track.id || loadingTrackId === track.id) {
+      if (audioRef.current) disposeAudio(audioRef.current);
+      audioRef.current = null;
+      setPlayingTrackId("");
+      setLoadingTrackId("");
+      return;
+    }
+
+    if (audioRef.current) disposeAudio(audioRef.current);
+    const audio = new Audio(track.previewUrl);
+    audio.preload = "none";
+    audioRef.current = audio;
+    setLoadingTrackId(track.id);
+    audio.onended = () => {
+      if (audioRef.current === audio) {
+        audioRef.current = null;
+        setPlayingTrackId("");
+      }
+    };
+    audio.onerror = () => {
+      if (audioRef.current === audio) {
+        audioRef.current = null;
+        setLoadingTrackId("");
+        setPlayingTrackId("");
+      }
+    };
+
+    try {
+      await audio.play();
+      if (audioRef.current === audio) setPlayingTrackId(track.id);
+    } catch {
+      if (audioRef.current === audio) {
+        disposeAudio(audio);
+        audioRef.current = null;
+        setPlayingTrackId("");
+      }
+    } finally {
+      if (audioRef.current === audio) setLoadingTrackId("");
+    }
+  }
+
+  return (
+    <ol className="queue-list">
+      {tracks.map((track, index) => {
+        const hasVote = votedTrackIds.has(track.id);
+        const isPending = pendingVotes.has(track.id);
+
+        return (
+          <li key={track.id} className={index === 0 ? "is-leading" : ""}>
+            <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
+            {track.previewUrl ? (
+              <button
+                type="button"
+                className="queue-art preview-play"
+                onClick={() => void togglePreview(track)}
+                aria-label={`${playingTrackId === track.id ? "Stop" : "Play"} 30-second preview of ${track.title}`}
+                aria-pressed={playingTrackId === track.id}
+              >
+                {loadingTrackId === track.id ? (
+                  <span className="preview-loader" aria-hidden="true" />
+                ) : playingTrackId === track.id ? (
+                  <Pause size={17} fill="currentColor" />
+                ) : (
+                  <Play size={17} fill="currentColor" />
+                )}
+              </button>
+            ) : (
+              <span className="queue-art" aria-hidden="true">
+                <AudioLines size={20} strokeWidth={1.7} />
+              </span>
+            )}
+            <span className="track-copy">
+              <strong>{track.title}</strong>
+              <small>
+                {track.artist}
+                {track.previewUrl ? " · 30 sec" : ""}
+              </small>
+            </span>
+            {interactive ? (
+              <button
+                type="button"
+                className={`vote-button ${hasVote ? "has-vote" : ""}`}
+                onClick={() => onVote?.(track.id)}
+                disabled={isPending || (lockSelectedVotes && hasVote)}
+                aria-label={`${hasVote ? lockSelectedVotes ? "Vote saved for" : "Remove vote from" : "Vote for"} ${track.title}, ${track.votes} ${track.votes === 1 ? "vote" : "votes"}`}
+                aria-pressed={hasVote}
+              >
+                {isPending ? (
+                  <span className="vote-pulse" aria-hidden="true" />
+                ) : (
+                  <ArrowUp size={17} strokeWidth={2.4} />
+                )}
+                <span>{track.votes}</span>
+              </button>
+            ) : (
+              <span className="vote-total">
+                <ArrowUp size={16} /> {track.votes}
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+export function IdentityGate({
+  joiningRoom,
+  afterFreeVote = false,
+  onSave,
+  onLogin,
+}: {
+  joiningRoom: boolean;
+  afterFreeVote?: boolean;
+  onSave: (phone: string, pseudonym: string) => Promise<void>;
+  onLogin: (phone: string) => Promise<void>;
+}) {
+  const [mode, setMode] = useState<"create" | "login">("create");
+  const [phone, setPhone] = useState("");
+  const [pseudonym, setPseudonym] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  async function submitIdentity(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setIsSaving(true);
+    setFormError("");
+    try {
+      if (mode === "login") {
+        await onLogin(phone);
+      } else {
+        await onSave(phone, pseudonym);
+      }
+    } catch (saveError) {
+      setFormError(getErrorMessage(saveError));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <main className="identity-page page-shell">
+      <section className="identity-intro">
+        <span className="eyebrow">
+          <UserRound size={14} /> {mode === "login"
+            ? "Welcome back"
+            : afterFreeVote
+              ? "Keep voting"
+              : joiningRoom
+                ? "Join the room"
+                : "Your profile"}
+        </span>
+        <h1>
+          {mode === "login"
+            ? "Log in by phone."
+            : afterFreeVote
+              ? "Your first vote is in."
+              : "Pick a name."}
+          <span>
+            {mode === "login"
+              ? "Continue on this device."
+              : afterFreeVote
+                ? "Add your phone to vote again."
+                : "Keep the phone private."}
+          </span>
+        </h1>
+        <p>
+          {mode === "login"
+            ? "Enter the phone number linked to your account. Phone verification will be added later."
+            : afterFreeVote
+              ? "Your free vote stays in the queue. Add a private phone number and pseudonym to make another pick."
+              : "Your pseudonym appears in the app. Your phone number identifies your account and is never shown to the room."}
+        </p>
+      </section>
+
+      <form className="identity-form" onSubmit={submitIdentity}>
+        <div className="identity-form-mark" aria-hidden="true">
+          <Phone size={28} strokeWidth={1.7} />
+        </div>
+        <label className="field">
+          <span>Phone number</span>
+          <input
+            type="tel"
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            placeholder="+32 470 00 00 00"
+            autoComplete="tel"
+            inputMode="tel"
+            required
+          />
+          <small>Include your country code.</small>
+        </label>
+        {mode === "create" && (
+          <label className="field">
+            <span>Pseudonym</span>
+            <input
+              type="text"
+              value={pseudonym}
+              onChange={(event) => setPseudonym(event.target.value)}
+              placeholder="Night Owl"
+              autoComplete="nickname"
+              minLength={2}
+              maxLength={24}
+              required
+            />
+            <small>Between 2 and 24 characters.</small>
+          </label>
+        )}
+        {formError && <p className="form-error" role="alert">{formError}</p>}
+        <button
+          type="submit"
+          className="primary-button identity-submit"
+          disabled={isSaving}
+        >
+          {isSaving
+            ? mode === "login"
+              ? "Logging in..."
+              : "Saving profile..."
+            : mode === "login"
+              ? "Log in"
+              : afterFreeVote
+                ? "Save and vote again"
+                : joiningRoom
+                  ? "Join room"
+                  : "Continue"}
+          <ArrowRight size={18} />
+        </button>
+        <p className="identity-switch">
+          {mode === "login" ? "Need an account?" : "Already have an account?"}
+          <button
+            type="button"
+            onClick={() => {
+              setMode((current) =>
+                current === "login" ? "create" : "login",
+              );
+              setFormError("");
+            }}
+          >
+            {mode === "login" ? "Create one" : "Log in"}
+          </button>
+        </p>
+        <p className="identity-note">
+          Phone verification is not enabled in this MVP.
+        </p>
+      </form>
+    </main>
+  );
+}
+
+function LoadingRoom({ label }: { label: string }) {
+  return (
+    <main className="loading-room page-shell" aria-live="polite">
+      <div className="loading-mark">
+        <span />
+        <span />
+        <span />
+      </div>
+      <strong>{label}</strong>
+      <p>Syncing the latest queue...</p>
+      <div className="loading-rows" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+      </div>
+    </main>
+  );
+}
+
+function MissingRoom({
+  isHost = false,
+  onReset,
+}: {
+  isHost?: boolean;
+  onReset?: () => void;
+}) {
+  return (
+    <main className="missing-room page-shell">
+      <span className="missing-code">404 / OFF AIR</span>
+      <h1>This room has ended.</h1>
+      <p>
+        {isHost
+          ? "The room expired or was closed. Start a fresh session to continue."
+          : "Ask the DJ for a fresh QR code to rejoin the queue."}
+      </p>
+      {isHost && onReset && (
+        <button type="button" className="primary-button" onClick={onReset}>
+          Start a new session <ArrowRight size={18} />
+        </button>
+      )}
+    </main>
+  );
+}
+
+function ConnectionRoom() {
+  return (
+    <main className="missing-room page-shell">
+      <span className="missing-code">RECONNECTING</span>
+      <h1>Trying to reach the room.</h1>
+      <p>Keep this page open. The queue will reconnect automatically.</p>
+    </main>
+  );
+}

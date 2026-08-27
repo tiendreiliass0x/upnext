@@ -1,0 +1,443 @@
+import { describe, expect, it } from "vitest";
+import { claimAnonymousVoter, createAccount } from "@/lib/accounts";
+import { closeDatabase, getDatabase } from "@/lib/db";
+import {
+  castAnonymousVote,
+  createSession,
+  endSession,
+  getActiveHostSession,
+  getAnonymousSession,
+  getSession,
+  getTrackPreviewKey,
+  registerAudioUpload,
+  toggleVote,
+} from "@/lib/sessions";
+import { setupTestDatabase } from "./helpers/database";
+
+const testDatabase = setupTestDatabase();
+
+function account(phone: string, pseudonym: string) {
+  return createAccount({ phone, pseudonym });
+}
+
+function room(accountId: string, requestId = crypto.randomUUID()) {
+  return createSession({
+    name: "Friday Room",
+    venue: "Room 02",
+    accountId,
+    requestId,
+    tracks: [
+      { title: "First", artist: "Artist A" },
+      { title: "Second", artist: "Artist B" },
+      { title: "Third", artist: "Artist C" },
+    ],
+  });
+}
+
+describe("sessions", () => {
+  it("counts account and anonymous votes per track without leaking across rooms", () => {
+    const host = account("+32470000099", "Counter Host");
+    const guestOne = account("+32470000098", "Guest One");
+    const guestTwo = account("+32470000097", "Guest Two");
+    const watched = room(host.id, "counted-room");
+    const other = room(host.id, "other-room");
+    const [firstTrack, secondTrack] = watched.session.tracks;
+
+    // Votes in a different room must never reach this room's totals.
+    other.session.tracks.forEach((track) => {
+      toggleVote({
+        sessionId: other.session.id,
+        trackId: track.id,
+        accountId: guestOne.id,
+        enabled: true,
+      });
+    });
+
+    toggleVote({
+      sessionId: watched.session.id,
+      trackId: firstTrack.id,
+      accountId: guestOne.id,
+      enabled: true,
+    });
+    toggleVote({
+      sessionId: watched.session.id,
+      trackId: firstTrack.id,
+      accountId: guestTwo.id,
+      enabled: true,
+    });
+    castAnonymousVote({
+      sessionId: watched.session.id,
+      trackId: firstTrack.id,
+      voterId: "anonymous-counter-voter-1",
+    });
+    castAnonymousVote({
+      sessionId: watched.session.id,
+      trackId: secondTrack.id,
+      voterId: "anonymous-counter-voter-2",
+    });
+
+    const view = getSession(watched.session.id);
+    const votesByTitle = Object.fromEntries(
+      view?.tracks.map((track) => [track.title, track.votes]) ?? [],
+    );
+
+    expect(votesByTitle).toEqual({ First: 3, Second: 1, Third: 0 });
+    expect(view?.tracks.map((track) => track.title)).toEqual([
+      "First",
+      "Second",
+      "Third",
+    ]);
+    expect(getSession(other.session.id)?.tracks.every((track) => track.votes === 1)).toBe(
+      true,
+    );
+  });
+
+  it("keeps upload order while votes are tied", () => {
+    const host = account("+32470000011", "Host");
+    const created = room(host.id);
+
+    expect(created.session.tracks.map((track) => track.title)).toEqual([
+      "First",
+      "Second",
+      "Third",
+    ]);
+    expect(created.session.totalVotes).toBe(0);
+  });
+
+  it("sorts by votes and tracks voter-specific selected state", () => {
+    const host = account("+32470000012", "Host");
+    const guestA = account("+32470000013", "Guest A");
+    const guestB = account("+32470000014", "Guest B");
+    const created = room(host.id);
+    const secondTrack = created.session.tracks[1];
+
+    const firstVote = toggleVote({
+      sessionId: created.session.id.toLowerCase(),
+      trackId: secondTrack.id,
+      accountId: guestA.id,
+    });
+    expect(firstVote?.voted).toBe(true);
+    expect(firstVote?.session.tracks[0].id).toBe(secondTrack.id);
+    expect(firstVote?.session.votedTrackIds).toEqual([secondTrack.id]);
+
+    toggleVote({
+      sessionId: created.session.id,
+      trackId: secondTrack.id,
+      accountId: guestB.id,
+    });
+    const guestAView = getSession(created.session.id, guestA.id);
+    const hostView = getSession(created.session.id, host.id);
+    expect(guestAView?.totalVotes).toBe(2);
+    expect(guestAView?.guestCount).toBe(2);
+    expect(guestAView?.votedTrackIds).toEqual([secondTrack.id]);
+    expect(hostView?.votedTrackIds).toEqual([]);
+
+    const removed = toggleVote({
+      sessionId: created.session.id,
+      trackId: secondTrack.id,
+      accountId: guestA.id,
+    });
+    expect(removed?.voted).toBe(false);
+    expect(removed?.session.totalVotes).toBe(1);
+  });
+
+  it("allows one idempotent anonymous vote per room and claims it on signup", () => {
+    const host = account("+32470000044", "Host");
+    const created = room(host.id);
+    const voterId = "browser-voter-0000000000000001";
+    const firstTrack = created.session.tracks[0];
+    const secondTrack = created.session.tracks[1];
+
+    const first = castAnonymousVote({
+      sessionId: created.session.id,
+      trackId: firstTrack.id,
+      voterId,
+    });
+    expect(first.status).toBe("voted");
+    if (first.status !== "voted") throw new Error("Anonymous vote failed");
+    expect(first.session.totalVotes).toBe(1);
+    expect(first.session.guestCount).toBe(1);
+    expect(first.session.votedTrackIds).toEqual([firstTrack.id]);
+
+    const repeated = castAnonymousVote({
+      sessionId: created.session.id,
+      trackId: firstTrack.id,
+      voterId,
+    });
+    expect(repeated.status).toBe("voted");
+    if (repeated.status !== "voted") throw new Error("Vote retry failed");
+    expect(repeated.session.totalVotes).toBe(1);
+
+    expect(
+      castAnonymousVote({
+        sessionId: created.session.id,
+        trackId: secondTrack.id,
+        voterId,
+      }),
+    ).toEqual({ status: "phone_required" });
+
+    const claimedAccount = createAccount({
+      phone: "+32470000045",
+      pseudonym: "Claimed Guest",
+      anonymousVoterId: voterId,
+    });
+    const claimedView = getSession(created.session.id, claimedAccount.id);
+    expect(claimedView?.totalVotes).toBe(1);
+    expect(claimedView?.guestCount).toBe(1);
+    expect(claimedView?.votedTrackIds).toEqual([firstTrack.id]);
+    expect(getAnonymousSession(created.session.id, voterId)?.votedTrackIds).toEqual(
+      [],
+    );
+    expect(
+      castAnonymousVote({
+        sessionId: created.session.id,
+        trackId: secondTrack.id,
+        voterId,
+      }),
+    ).toEqual({ status: "phone_required" });
+
+    const second = toggleVote({
+      sessionId: created.session.id,
+      trackId: secondTrack.id,
+      accountId: claimedAccount.id,
+    });
+    expect(second?.session.totalVotes).toBe(2);
+    expect(second?.session.votedTrackIds).toEqual(
+      expect.arrayContaining([firstTrack.id, secondTrack.id]),
+    );
+  });
+
+  it("claims a free vote when an existing account logs in", () => {
+    const host = account("+32470000051", "Host");
+    const returningGuest = account("+32470000052", "Returning Guest");
+    const created = room(host.id);
+    const voterId = "returning-voter-00000000000001";
+    const trackId = created.session.tracks[1].id;
+
+    expect(
+      castAnonymousVote({
+        sessionId: created.session.id,
+        trackId,
+        voterId,
+      }).status,
+    ).toBe("voted");
+    claimAnonymousVoter({ accountId: returningGuest.id, voterId });
+
+    const accountView = getSession(created.session.id, returningGuest.id);
+    expect(accountView?.totalVotes).toBe(1);
+    expect(accountView?.guestCount).toBe(1);
+    expect(accountView?.votedTrackIds).toEqual([trackId]);
+    expect(
+      castAnonymousVote({
+        sessionId: created.session.id,
+        trackId: created.session.tracks[2].id,
+        voterId,
+      }),
+    ).toEqual({ status: "phone_required" });
+  });
+
+  it("makes explicit account vote writes idempotent", () => {
+    const host = account("+32470000047", "Host");
+    const guest = account("+32470000048", "Guest");
+    const created = room(host.id);
+    const trackId = created.session.tracks[0].id;
+
+    const first = toggleVote({
+      sessionId: created.session.id,
+      trackId,
+      accountId: guest.id,
+      enabled: true,
+    });
+    const retry = toggleVote({
+      sessionId: created.session.id,
+      trackId,
+      accountId: guest.id,
+      enabled: true,
+    });
+    expect(first?.session.totalVotes).toBe(1);
+    expect(retry?.session.totalVotes).toBe(1);
+    expect(retry?.session.revision).toBe(first?.session.revision);
+
+    const removed = toggleVote({
+      sessionId: created.session.id,
+      trackId,
+      accountId: guest.id,
+      enabled: false,
+    });
+    const removeRetry = toggleVote({
+      sessionId: created.session.id,
+      trackId,
+      accountId: guest.id,
+      enabled: false,
+    });
+    expect(removed?.session.totalVotes).toBe(0);
+    expect(removeRetry?.session.revision).toBe(removed?.session.revision);
+  });
+
+  it("gives the same anonymous voter one free vote in each room", () => {
+    const host = account("+32470000046", "Host");
+    const firstRoom = room(host.id, "anonymous-room-one");
+    const secondRoom = room(host.id, "anonymous-room-two");
+    const voterId = "browser-voter-0000000000000002";
+
+    expect(
+      castAnonymousVote({
+        sessionId: firstRoom.session.id,
+        trackId: firstRoom.session.tracks[0].id,
+        voterId,
+      }).status,
+    ).toBe("voted");
+    expect(
+      castAnonymousVote({
+        sessionId: secondRoom.session.id,
+        trackId: secondRoom.session.tracks[0].id,
+        voterId,
+      }).status,
+    ).toBe("voted");
+  });
+
+  it("rejects vote rows whose track belongs to another session", () => {
+    const host = account("+32470000049", "Host");
+    const guest = account("+32470000050", "Guest");
+    const firstRoom = room(host.id, "constraint-room-one");
+    const secondRoom = room(host.id, "constraint-room-two");
+
+    expect(() =>
+      getDatabase()
+        .prepare(
+          `INSERT INTO votes (track_id, session_id, account_id, created_at)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          firstRoom.session.tracks[0].id,
+          secondRoom.session.id,
+          guest.id,
+          new Date().toISOString(),
+        ),
+    ).toThrow("vote track/session mismatch");
+
+    toggleVote({
+      sessionId: firstRoom.session.id,
+      trackId: firstRoom.session.tracks[0].id,
+      accountId: guest.id,
+      enabled: true,
+    });
+    expect(() =>
+      getDatabase()
+        .prepare("UPDATE tracks SET session_id = ? WHERE id = ?")
+        .run(secondRoom.session.id, firstRoom.session.tracks[0].id),
+    ).toThrow("voted track session cannot change");
+  });
+
+  it("deduplicates room creation by host request ID", () => {
+    const host = account("+32470000015", "Host");
+    const requestId = "stable-request";
+    const first = room(host.id, requestId);
+    const repeated = room(host.id, requestId);
+
+    expect(repeated.session.id).toBe(first.session.id);
+    expect(repeated.hostKey).toBe(first.hostKey);
+    const count = getDatabase()
+      .prepare("SELECT COUNT(*) AS count FROM sessions WHERE request_id = ?")
+      .get(requestId) as { count: number };
+    expect(count.count).toBe(1);
+  });
+
+  it("only links previews uploaded by the host account", () => {
+    const owner = account("+32470000016", "Owner");
+    const other = account("+32470000017", "Other");
+    registerAudioUpload({
+      objectKey: "previews/owner/sample.mp3",
+      accountId: owner.id,
+      originalName: "sample.mp3",
+      requestId: "upload-1",
+    });
+
+    const ownerRoom = createSession({
+      name: "Owner Room",
+      venue: "",
+      accountId: owner.id,
+      tracks: [
+        {
+          title: "Preview",
+          artist: "Owner",
+          previewKey: "previews/owner/sample.mp3",
+        },
+      ],
+    });
+    const otherRoom = createSession({
+      name: "Other Room",
+      venue: "",
+      accountId: other.id,
+      tracks: [
+        {
+          title: "Stolen Preview",
+          artist: "Other",
+          previewKey: "previews/owner/sample.mp3",
+        },
+      ],
+    });
+
+    expect(ownerRoom.session.tracks[0].previewUrl).toContain("/preview");
+    expect(otherRoom.session.tracks[0].previewUrl).toBeNull();
+    expect(getTrackPreviewKey(ownerRoom.session.tracks[0].id)).toBe(
+      "previews/owner/sample.mp3",
+    );
+  });
+
+  it("persists accounts, rooms, and votes after reopening SQLite", () => {
+    const host = account("+32470000018", "Persistent Host");
+    const guest = account("+32470000019", "Persistent Guest");
+    const created = room(host.id);
+    toggleVote({
+      sessionId: created.session.id,
+      trackId: created.session.tracks[2].id,
+      accountId: guest.id,
+    });
+
+    const path = testDatabase.path;
+    closeDatabase();
+    process.env.SQLITE_PATH = path;
+
+    const restored = getSession(created.session.id, guest.id);
+    expect(restored?.totalVotes).toBe(1);
+    expect(restored?.tracks[0].title).toBe("Third");
+    expect(restored?.votedTrackIds).toEqual([created.session.tracks[2].id]);
+  });
+
+  it("enforces host ownership and removes ended or expired rooms", () => {
+    const host = account("+32470000020", "Host");
+    const guest = account("+32470000021", "Guest");
+    const created = room(host.id);
+
+    expect(
+      endSession({
+        sessionId: created.session.id,
+        hostKey: created.hostKey,
+        accountId: guest.id,
+      }),
+    ).toBe("forbidden");
+    expect(getActiveHostSession(host.id)?.session.id).toBe(created.session.id);
+    expect(
+      endSession({
+        sessionId: created.session.id,
+        hostKey: created.hostKey,
+        accountId: host.id,
+      }),
+    ).toBe("ended");
+    expect(getSession(created.session.id)).toBeNull();
+
+    const expiring = room(host.id, "expiring-room");
+    getDatabase()
+      .prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+      .run("2000-01-01T00:00:00.000Z", expiring.session.id);
+    expect(getSession(expiring.session.id)).toBeNull();
+    expect(
+      toggleVote({
+        sessionId: expiring.session.id,
+        trackId: expiring.session.tracks[0].id,
+        accountId: guest.id,
+      }),
+    ).toBeNull();
+  });
+});
