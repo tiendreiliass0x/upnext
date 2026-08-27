@@ -15,6 +15,69 @@ set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 NVM_ROOT="${NVM_DIR:-$HOME/.nvm}"
 
+# Must match StandardOutPath/StandardErrorPath in the LaunchAgent plist.
+LOG_FILE="${UPNEXT_CLEANUP_LOG:-$HOME/Library/Logs/upnext-cleanup.log}"
+STATE_DIR="${UPNEXT_CLEANUP_STATE:-$HOME/Library/Application Support/com.upnext.cleanup}"
+# launchd appends to its log forever and has no rotation of its own, so the
+# wrapper caps it. Two generations at 1 MB bounds this at ~2 MB.
+MAX_LOG_BYTES=${UPNEXT_CLEANUP_MAX_LOG_BYTES:-1048576}
+
+log_bytes() {
+  [ -f "$LOG_FILE" ] || { echo 0; return; }
+  wc -c < "$LOG_FILE" | tr -d " "
+}
+
+rotate_log() {
+  [ -f "$LOG_FILE" ] || return 0
+  [ "$(log_bytes)" -gt "$MAX_LOG_BYTES" ] || return 0
+  # launchd already holds this file open, so the current run's own output lands
+  # in the rotated copy. The next run starts the fresh file.
+  mv -f "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null || true
+}
+
+# Failure has to survive the banner being missed, dismissed, or suppressed by a
+# Focus mode, so it is recorded on disk as well as announced.
+notify() {
+  [ "${UPNEXT_CLEANUP_NOTIFY:-1}" = "1" ] || return 0
+  command -v osascript >/dev/null 2>&1 || return 0
+  if osascript -e "display notification \"$2\" with title \"$1\"" >/dev/null 2>&1; then
+    echo "upnext-cleanup: notified: $1 - $2" >&2
+  else
+    echo "upnext-cleanup: notification could not be posted: $1 - $2" >&2
+  fi
+}
+
+# Never silent: this is the mechanism that makes failures visible, so it must
+# not be able to fail quietly itself.
+record() {
+  if ! mkdir -p "$STATE_DIR" 2>/dev/null; then
+    echo "upnext-cleanup: cannot create state dir [$STATE_DIR] (HOME=[${HOME:-unset}])" >&2
+    return 0
+  fi
+  if ! printf '%s\n' "$2" > "$STATE_DIR/$1" 2>/dev/null; then
+    echo "upnext-cleanup: cannot write [$STATE_DIR/$1]" >&2
+    return 0
+  fi
+}
+
+human_age() {
+  [ -f "$STATE_DIR/$1" ] || { printf 'never'; return; }
+  _then=$(cat "$STATE_DIR/$1" 2>/dev/null | head -1)
+  case $_then in '' | *[!0-9]*) printf 'unknown'; return ;; esac
+  _age=$(( $(date +%s) - _then ))
+  printf '%s (%dh %dm ago)' "$(date -r "$_then" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)" \
+    "$((_age / 3600))" "$(((_age % 3600) / 60))"
+}
+
+if [ "${1:-}" = "--status" ]; then
+  echo "last success : $(human_age last-success)"
+  echo "last failure : $(human_age last-failure)"
+  [ -f "$STATE_DIR/last-failure-reason" ] &&
+    echo "               $(cat "$STATE_DIR/last-failure-reason")"
+  echo "log          : $LOG_FILE ($(log_bytes) bytes, cap ${MAX_LOG_BYTES})"
+  exit 0
+fi
+
 # --env-file-if-exists landed in Node 22.9.0.
 MIN_MAJOR=22
 MIN_MINOR=9
@@ -59,6 +122,9 @@ if [ -z "$NODE_BIN" ]; then
 fi
 
 if [ -z "$NODE_BIN" ]; then
+  record last-failure "$(date +%s)"
+  record last-failure-reason "no Node >= $MIN_MAJOR.$MIN_MINOR found"
+  notify "UP/NEXT cleanup failed" "No Node >= $MIN_MAJOR.$MIN_MINOR found. Cleanup did not run."
   echo "upnext-cleanup: no Node >= $MIN_MAJOR.$MIN_MINOR found; cleanup did NOT run." >&2
   echo "  nvm default alias : ${TARGET:-<unset>}" >&2
   echo "  looked under      : $NVM_ROOT/versions/node" >&2
@@ -74,5 +140,21 @@ if [ "${1:-}" = "--print-node" ]; then
   exit 0
 fi
 
+rotate_log
 cd "$PROJECT_DIR"
-exec "$NODE_BIN" --env-file-if-exists=.env --import tsx scripts/cleanup.ts
+
+# Deliberately not exec: the exit status has to be inspected so a failure can be
+# announced rather than left in a log nobody reads.
+set +e
+"$NODE_BIN" --env-file-if-exists=.env --import tsx scripts/cleanup.ts
+STATUS=$?
+set -e
+
+if [ "$STATUS" -eq 0 ]; then
+  record last-success "$(date +%s)"
+else
+  record last-failure "$(date +%s)"
+  record last-failure-reason "cleanup exited $STATUS"
+  notify "UP/NEXT cleanup failed" "Exit $STATUS. See $LOG_FILE"
+fi
+exit "$STATUS"

@@ -59,6 +59,23 @@ message instead of failing obscurely. `scripts/run-cleanup.sh --print-node`
 reports which interpreter a scheduled run would pick, without running the job.
 `bun run cleanup` remains the interactive entry point.
 
+A failed run posts a macOS notification and records the reason under
+`~/Library/Application Support/com.upnext.cleanup`, so the failure survives a
+banner that was missed or suppressed by a Focus mode.
+`scripts/run-cleanup.sh --status` prints last success, last failure and the log
+size. Set `UPNEXT_CLEANUP_NOTIFY=0` to silence banners (they are skipped
+automatically where `osascript` does not exist, such as a Linux server).
+
+The wrapper also caps the log, which launchd appends to forever and never
+rotates: one generation at 1 MB, so the pair is bounded at ~2 MB.
+
+This does not detect the job never running at all. Nothing self-hosted can —
+if the agent is unloaded, no code of ours executes. Gap-alerting from a
+heartbeat was considered and rejected: an hourly job on a laptop legitimately
+misses every run during sleep, so it would fire every morning and be ignored.
+A true dead-man switch needs an external monitor that expects a periodic
+check-in.
+
 Retention is controlled by `CLEANUP_ROOM_RETENTION_HOURS` and
 `CLEANUP_UPLOAD_GRACE_HOURS` (the grace period covers a DJ who uploaded previews
 but has not opened the room yet). Both ship set to 24 hours in `.env.example`;
