@@ -1,0 +1,111 @@
+# main → production. Runs the CI gate, builds the image once on GitHub (not on
+# the 1–2 GB VPS), pushes it to GHCR, then tells the VPS to pull that exact
+# tag, restart, and prove the app is healthy — rolling back to the previous
+# tag if it is not.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   VPS_HOST         address of the VPS
+#   VPS_USER         SSH user (the one provision.sh ran as; needs docker access)
+#   VPS_SSH_KEY      private key for that user (ed25519; the public half goes in
+#                    ~/.ssh/authorized_keys on the VPS)
+#   VPS_KNOWN_HOSTS  optional: output of `ssh-keyscan <host>`. Without it the
+#                    first connection trusts whatever answers (TOFU).
+# Variables:
+#   VPS_APP_DIR      optional: checkout path on the VPS (default /opt/upnext)
+#
+# Until VPS_HOST is set, the workflow builds and pushes the image and stops.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# One deploy at a time, and never cancel one mid-flight: a half-applied
+# rollout is worse than a queued one.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  image:
+    name: Build and push image
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        run: echo "tag=sha-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    name: Roll out to the VPS
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: production
+    env:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+      VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+      APP_DIR: ${{ vars.VPS_APP_DIR || '/opt/upnext' }}
+      TAG: ${{ needs.image.outputs.tag }}
+    steps:
+      - name: Skip when no VPS is configured
+        if: env.VPS_HOST == ''
+        run: echo "::notice::VPS_HOST is not set; image ${IMAGE}:${TAG} was pushed but nothing was deployed."
+
+      - name: Prepare SSH
+        if: env.VPS_HOST != ''
+        run: |
+          set -eu
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          if [ -n "$VPS_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::VPS_KNOWN_HOSTS is not set; trusting the host key on first use."
+            ssh-keyscan -H "$VPS_HOST" > ~/.ssh/known_hosts 2>/dev/null
+          fi
+
+      - name: Pull, restart, verify, roll back on failure
+        if: env.VPS_HOST != ''
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o ConnectTimeout=20 \
+            "$VPS_USER@$VPS_HOST" \
+            "APP_DIR='$APP_DIR' IMAGE='$IMAGE' TAG='$TAG' GHCR_USER='$GHCR_USER' GHCR_TOKEN='$GHCR_TOKEN' bash -s" \
+            < deploy/rollout.sh

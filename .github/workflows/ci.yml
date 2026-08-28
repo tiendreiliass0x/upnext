@@ -1,0 +1,73 @@
+# Every pull request and every push to main runs the same gate the Dockerfile
+# and the developer run locally: types, lint, tests with coverage thresholds,
+# a production build, and a Docker image build. deploy.yml calls this
+# workflow, so main is never deployed from code that did not pass it.
+name: CI
+
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  check:
+    name: Types, lint, tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node is the runtime (better-sqlite3's binding is Node-ABI); bun is only
+      # the package manager. Same split as the Dockerfile.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.20
+
+      - name: Cache bun downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Type check
+        run: bunx tsc --noEmit -p .
+
+      - name: Lint
+        run: bunx eslint . --max-warnings 0
+
+      - name: Test with coverage thresholds
+        run: bun run test:coverage
+
+      - name: Production build
+        run: bun run build
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Build only. deploy.yml pushes; here the point is catching a Dockerfile
+      # or standalone-tracing break before it reaches main.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

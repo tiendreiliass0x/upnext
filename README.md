@@ -298,6 +298,24 @@ entry; the wrapper's own log cap only applies where it owns the log file):
 file and the upload concurrency limit is an in-process `Set`, so a second
 replica would split the limiter and corrupt the counts.
 
+### Continuous deployment
+
+Merging to `main` runs CI (types, lint, tests with coverage thresholds,
+production build, Docker build), then builds the image on GitHub, pushes it to
+`ghcr.io/tiendreiliass0x/upnext` as `sha-<commit>` and `latest`, and rolls it
+out over SSH: the VPS pulls that exact tag, restarts, waits for the container
+healthcheck, and rolls back to the previous tag if it never goes healthy.
+Building on GitHub rather than on the VPS is deliberate — `next build` on a
+1–2 GB box is the slowest and least reliable step of a deploy.
+
+It needs four repository secrets — `VPS_HOST`, `VPS_USER`, `VPS_SSH_KEY`
+(private ed25519 key whose public half is in that user's
+`~/.ssh/authorized_keys`), and optionally `VPS_KNOWN_HOSTS` from
+`ssh-keyscan <host>` — plus the variable `VPS_APP_DIR` if the checkout is not
+at `/opt/upnext`. Until `VPS_HOST` is set the workflow only pushes the image.
+The rollout script is `deploy/rollout.sh`; see `CONTRIBUTING.md` for the
+branch workflow and how to roll back by hand.
+
 ## Production
 
 Run the app as one long-lived Node process and set `SQLITE_PATH` to a mounted,

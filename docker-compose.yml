@@ -5,6 +5,10 @@
 
 services:
   app:
+    # CI builds and pushes this image; deploy/rollout.sh pins the tag in .env.
+    # `build` stays so provision.sh (and a laptop) can still build it locally,
+    # tagged under the same name.
+    image: ghcr.io/tiendreiliass0x/upnext:${UPNEXT_IMAGE_TAG:-latest}
     build: .
     restart: unless-stopped
     env_file: .env
