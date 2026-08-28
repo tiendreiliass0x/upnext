@@ -19,8 +19,8 @@
     "better-sqlite3": "^11.8.1",
     "lucide-react": "^0.544.0",
     "next": "^15.5.24",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
     "react-qr-code": "^2.2.0"
   },
   "devDependencies": {
