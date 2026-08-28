@@ -119,11 +119,27 @@ resolve to platform-specific binaries at install time, and a macOS build cannot
 run in a Linux image. Give the box at least 2 GB of RAM: `next build` is the
 memory-hungry step, not serving.
 
+`deploy/provision.sh` does the whole thing on a fresh Debian or Ubuntu box:
+swap if the RAM is tight, Docker, a firewall, the stack itself, and the hourly
+cleanup cron. It is idempotent, so re-run it to redeploy after a `git pull`.
+
 ```
 git clone <repo> /srv/upnext && cd /srv/upnext
+sudo bash deploy/provision.sh --dry-run     # see the plan, change nothing
+sudo bash deploy/provision.sh               # hostname derived from the public IP
+```
+
+It stops before starting anything if R2 credentials are missing from `.env`,
+rather than bringing up a room whose uploads fail at the last step. Add them
+and run it again. Pass `--host dj.example.com` once you have a domain;
+otherwise it derives an sslip.io hostname from the machine's own address
+without contacting any outside service.
+
+Or, by hand:
+
+```
 cp .env.example .env      # add R2 credentials
-# Without a domain, sslip.io turns an IP into a hostname:
-echo 'SITE_ADDRESS=203-0-113-4.sslip.io'        >> .env
+echo 'SITE_ADDRESS=203-0-113-4.sslip.io'           >> .env
 echo 'APP_PUBLIC_URL=https://203-0-113-4.sslip.io' >> .env
 docker compose up -d --build
 ```
