@@ -49,7 +49,7 @@ export async function POST(
   }
   if (result === "no_track") {
     return NextResponse.json(
-      { error: "Every track in this room has been played." },
+      { error: "Every track in this room is cooling down." },
       { status: 409 },
     );
   }

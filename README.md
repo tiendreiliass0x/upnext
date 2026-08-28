@@ -144,14 +144,19 @@ Songs play in full, so a playlist here is a listenable set, not just an audition
 ## Now Playing
 
 The live booth has a **Now playing** panel with one main action: *Play crowd
-pick*, which puts on the top-voted song that has not been played yet. The DJ
-can also take a song off. Each change stamps the track as played and bumps the
+pick*, which puts on the top-voted song that is not on cooldown. The DJ can
+also take a song off. Each change stamps the track as played and bumps the
 room revision, so every guest's next poll carries it.
 
-A played song sinks below the ballot and can no longer be voted for — its vote
-has been spent, and the "crowd pick" shown to guests is always the next
-*unplayed* song. Votes already on a played track are kept, not deleted, so the
-counts stay honest.
+A played song is not gone for good — people may want to hear it again — but it
+sits out on a **cooldown** until two other songs have rolled. While cooling it
+sinks below the ballot, its row says how many songs are left, and a vote on it
+is refused with *"Cooldown — try again after two/one more song(s) have
+rolled."* (409, code `COOLDOWN`). Its votes are spent when it plays: account
+votes are removed so the same people can vote it back up, and an anonymous
+guest's one free vote stays used but stops counting. So a song comes back on
+fresh votes, never on the ones that already got it played. The "crowd pick"
+shown to guests is always the first song that is off cooldown.
 
 Guests see the song docked under the ballot with a *Listen along* button.
 Browsers refuse unprompted audio, so the first song needs a tap; after that a

@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getAccountFromRequest } from "@/lib/auth";
 import {
-  alreadyPlayedMessage,
+  CooldownError,
   castAnonymousVote,
+  cooldownMessage,
   toggleVote,
 } from "@/lib/sessions";
 import { getAnonymousVoterId } from "@/lib/voters";
@@ -61,9 +62,13 @@ export async function POST(
           voterId: anonymousVoterId as string,
         });
 
-    if (result && "status" in result && result.status === "already_played") {
+    if (result && "status" in result && result.status === "cooldown") {
       return NextResponse.json(
-        { error: alreadyPlayedMessage, code: "ALREADY_PLAYED" },
+        {
+          error: cooldownMessage(result.songsRemaining),
+          code: "COOLDOWN",
+          songsRemaining: result.songsRemaining,
+        },
         { status: 409 },
       );
     }
@@ -90,9 +95,13 @@ export async function POST(
     }
     return NextResponse.json(result);
   } catch (error) {
-    if (error instanceof Error && error.message === alreadyPlayedMessage) {
+    if (error instanceof CooldownError) {
       return NextResponse.json(
-        { error: alreadyPlayedMessage, code: "ALREADY_PLAYED" },
+        {
+          error: error.message,
+          code: "COOLDOWN",
+          songsRemaining: error.songsRemaining,
+        },
         { status: 409 },
       );
     }

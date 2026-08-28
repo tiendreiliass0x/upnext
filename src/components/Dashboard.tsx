@@ -1323,6 +1323,7 @@ export default function Dashboard({
       position,
       previewUrl: null,
       playedAt: null,
+      cooldown: 0,
     })),
   };
   const guestDockVisible =
@@ -1948,7 +1949,7 @@ function DJLiveRoom({
   if (isLoading || !session || !sessionLink) {
     return <LoadingRoom label="Opening the room" />;
   }
-  const nextUp = session.tracks.find((track) => !track.playedAt);
+  const nextUp = session.tracks.find((track) => track.cooldown === 0);
 
   return (
     <main className="live-page page-shell">
@@ -2060,7 +2061,7 @@ function DJLiveRoom({
                 onClick={() => onPlay("next")}
               >
                 <Play size={16} fill="currentColor" />
-                {nextUp ? `Play crowd pick: ${nextUp.title}` : "Every track played"}
+                {nextUp ? `Play crowd pick: ${nextUp.title}` : "Everything is cooling down"}
               </button>
               {session.nowPlaying && (
                 <button
@@ -2106,7 +2107,7 @@ function GuestRoom({
 }: GuestRoomProps) {
   if (isLoading) return <LoadingRoom label="Joining the room" />;
 
-  const topTrack = session.tracks.find((track) => !track.playedAt);
+  const topTrack = session.tracks.find((track) => track.cooldown === 0);
 
   return (
     <main className="guest-page page-shell">
@@ -2273,11 +2274,12 @@ export function QueueList({
         const hasVote = votedTrackIds.has(track.id);
         const isPending = pendingVotes.has(track.id);
         const played = Boolean(track.playedAt);
+        const cooling = track.cooldown > 0;
 
         return (
           <li
             key={track.id}
-            className={`${index === 0 && !played ? "is-leading" : ""}${played ? " is-played" : ""}`}
+            className={`${index === 0 && !cooling ? "is-leading" : ""}${cooling ? " is-played" : ""}`}
           >
             <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
             {track.previewUrl ? (
@@ -2305,7 +2307,11 @@ export function QueueList({
               <strong>{track.title}</strong>
               <small>
                 {track.artist}
-                {played ? " · played" : ""}
+                {cooling
+                  ? ` · cooldown: ${track.cooldown} more song${track.cooldown === 1 ? "" : "s"}`
+                  : played
+                    ? " · played"
+                    : ""}
               </small>
             </span>
             {interactive ? (
@@ -2313,7 +2319,7 @@ export function QueueList({
                 type="button"
                 className={`vote-button ${hasVote ? "has-vote" : ""}`}
                 onClick={() => onVote?.(track.id)}
-                disabled={played || isPending || (lockSelectedVotes && hasVote)}
+                disabled={cooling || isPending || (lockSelectedVotes && hasVote)}
                 aria-label={`${hasVote ? lockSelectedVotes ? "Vote saved for" : "Remove vote from" : "Vote for"} ${track.title}, ${track.votes} ${track.votes === 1 ? "vote" : "votes"}`}
                 aria-pressed={hasVote}
               >

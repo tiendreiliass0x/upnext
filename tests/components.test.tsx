@@ -20,6 +20,7 @@ const tracks: SessionTrack[] = [
     position: 0,
     previewUrl: "/api/tracks/track-one/preview",
     playedAt: null,
+    cooldown: 0,
   },
   {
     id: "track-two",
@@ -29,6 +30,7 @@ const tracks: SessionTrack[] = [
     position: 1,
     previewUrl: "/api/tracks/track-two/preview",
     playedAt: null,
+    cooldown: 0,
   },
 ];
 
@@ -695,7 +697,10 @@ describe("now playing", () => {
       previewUrl: "/api/tracks/track-one/preview",
       startedAt: new Date(Date.now() - 20_000).toISOString(),
     },
-    tracks: [{ ...tracks[0], playedAt: "2026-08-26T00:00:00.000Z" }, tracks[1]],
+    tracks: [
+      { ...tracks[0], playedAt: "2026-08-26T00:00:00.000Z", cooldown: 2 },
+      tracks[1],
+    ],
   };
 
   it("docks the DJ's song under the ballot and takes the played track off the ballot", async () => {
@@ -708,9 +713,11 @@ describe("now playing", () => {
     const dock = await screen.findByRole("region", { name: "Now playing" }, { timeout: 3000 });
     expect(within(dock).getByText("First Track")).toBeInTheDocument();
     expect(within(dock).getByRole("button", { name: "Listen along" })).toBeEnabled();
-    // The crowd pick is the next unplayed song, and a played one cannot be voted for.
+    // The crowd pick is the next song off cooldown; one still cooling cannot be
+    // voted for and says how long it has left.
     expect(screen.getByText(/Second Track is ranked first/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /vote for first track/i })).toBeDisabled();
+    expect(screen.getByText(/cooldown: 2 more songs/)).toBeInTheDocument();
   });
 
   it("lets the DJ put the crowd pick on and adopts the returned room", async () => {

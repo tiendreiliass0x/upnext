@@ -4,8 +4,9 @@ import { GET as getRoom } from "@/app/api/sessions/[id]/route";
 import { POST as voteRoute } from "@/app/api/sessions/[id]/vote/route";
 import { createAccount } from "@/lib/accounts";
 import {
-  alreadyPlayedMessage,
+  CooldownError,
   castAnonymousVote,
+  cooldownMessage,
   createSession,
   getSession,
   setNowPlaying,
@@ -60,7 +61,32 @@ describe("setNowPlaying", () => {
     current = getSession(session.id)!;
     expect(current.nowPlaying?.title).toBe("Opener");
 
+    // Two songs have rolled since Banger, so it is open again — with its
+    // earlier vote spent, it comes back on position, not on old votes.
     setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: "next" });
+    current = getSession(session.id)!;
+    expect(current.nowPlaying?.title).toBe("Closer");
+    const banger = current.tracks.find((track) => track.title === "Banger")!;
+    expect(banger.cooldown).toBe(0);
+    expect(banger.votes).toBe(0);
+    expect(
+      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: "next" }),
+    ).toBe("updated");
+    expect(getSession(session.id)!.nowPlaying?.title).toBe("Banger");
+  });
+
+  it("reports no track only when everything is still cooling down", () => {
+    const host = createAccount({ phone: "+32470000063", pseudonym: "Host" });
+    const { session, hostKey } = createSession({
+      name: "Solo",
+      venue: "",
+      accountId: host.id,
+      requestId: crypto.randomUUID(),
+      tracks: [{ title: "Only", artist: "A" }],
+    });
+    expect(
+      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: "next" }),
+    ).toBe("updated");
     expect(
       setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: "next" }),
     ).toBe("no_track");
@@ -155,11 +181,18 @@ describe("POST /api/sessions/[id]/now-playing", () => {
     for (let round = 0; round < 2; round += 1) {
       await call(session.id, host.authToken, hostKey, { trackId: "next" });
     }
-    expect((await call(session.id, host.authToken, hostKey, { trackId: "next" })).status).toBe(409);
+    // Two songs have rolled since Opener, so the room never runs dry: it is
+    // the crowd pick again rather than a 409.
+    const again = await call(session.id, host.authToken, hostKey, { trackId: "next" });
+    expect(again.status).toBe(200);
+    expect(
+      ((await again.json()) as { session: { nowPlaying: { title: string } } }).session
+        .nowPlaying.title,
+    ).toBe("Opener");
   });
 });
 
-describe("voting on a played track", () => {
+describe("voting on a track that is cooling down", () => {
   function request(url: string, init: { body: unknown; token?: string; voterId?: string }) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (init.token) headers.Authorization = `Bearer ${init.token}`;
@@ -167,7 +200,7 @@ describe("voting on a played track", () => {
     return new Request(url, { method: "POST", headers, body: JSON.stringify(init.body) });
   }
 
-  it("is refused, so a guest whose poll has not caught up cannot spend a vote on it", () => {
+  it("is refused with how many songs are left, and the free vote is not consumed", () => {
     const host = createAccount({ phone: "+32470000070", pseudonym: "Host" });
     const guest = createAccount({ phone: "+32470000071", pseudonym: "Guest" });
     const { session, hostKey } = room(host.id);
@@ -178,10 +211,12 @@ describe("voting on a played track", () => {
 
     expect(() =>
       toggleVote({ sessionId: session.id, trackId: played, accountId: guest.id, enabled: true }),
-    ).toThrow(alreadyPlayedMessage);
+    ).toThrow(cooldownMessage(2));
+    expect(cooldownMessage(2)).toMatch(/two more songs have rolled/);
+    expect(cooldownMessage(1)).toMatch(/one more song has rolled/);
     expect(
       castAnonymousVote({ sessionId: session.id, trackId: played, voterId: "late-phone-1" }),
-    ).toMatchObject({ status: "already_played" });
+    ).toMatchObject({ status: "cooldown", songsRemaining: 2 });
     // The free vote was not consumed by the refusal.
     expect(
       castAnonymousVote({
@@ -225,7 +260,44 @@ describe("voting on a played track", () => {
         { params: Promise.resolve({ id: session.id }) },
       );
       expect(response.status).toBe(409);
-      expect(await response.json()).toMatchObject({ code: "ALREADY_PLAYED" });
+      expect(await response.json()).toMatchObject({ code: "COOLDOWN", songsRemaining: 2 });
     }
+  });
+
+  it("opens the song again after two more have rolled, and counts only new votes", () => {
+    const host = createAccount({ phone: "+32470000076", pseudonym: "Host" });
+    const guest = createAccount({ phone: "+32470000077", pseudonym: "Guest" });
+    const { session, hostKey } = room(host.id);
+    const opener = trackId(session.id, "Opener");
+    const play = (id: string) =>
+      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: id });
+
+    toggleVote({ sessionId: session.id, trackId: opener, accountId: guest.id, enabled: true });
+    play(opener);
+    play(trackId(session.id, "Banger"));
+    // One more to go.
+    let error: unknown;
+    try {
+      toggleVote({ sessionId: session.id, trackId: opener, accountId: guest.id, enabled: true });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(CooldownError);
+    expect((error as CooldownError).songsRemaining).toBe(1);
+    expect(getSession(session.id)!.tracks.find((t) => t.id === opener)?.cooldown).toBe(1);
+
+    play(trackId(session.id, "Closer"));
+    const reopened = getSession(session.id)!.tracks.find((t) => t.id === opener)!;
+    expect(reopened.cooldown).toBe(0);
+    // The vote from before it played was spent with that play.
+    expect(reopened.votes).toBe(0);
+    const again = toggleVote({
+      sessionId: session.id,
+      trackId: opener,
+      accountId: guest.id,
+      enabled: true,
+    });
+    expect(again?.voted).toBe(true);
+    expect(again?.session.tracks.find((t) => t.id === opener)?.votes).toBe(1);
   });
 });
