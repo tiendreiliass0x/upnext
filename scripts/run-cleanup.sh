@@ -15,9 +15,17 @@ set -eu
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 NVM_ROOT="${NVM_DIR:-$HOME/.nvm}"
 
-# Must match StandardOutPath/StandardErrorPath in the LaunchAgent plist.
-LOG_FILE="${UPNEXT_CLEANUP_LOG:-$HOME/Library/Logs/upnext-cleanup.log}"
-STATE_DIR="${UPNEXT_CLEANUP_STATE:-$HOME/Library/Application Support/com.upnext.cleanup}"
+# macOS keeps user logs and state under ~/Library; everything else follows the
+# XDG layout. The LaunchAgent's StandardOutPath must match the macOS branch.
+if [ -d "$HOME/Library" ]; then
+  default_log="$HOME/Library/Logs/upnext-cleanup.log"
+  default_state="$HOME/Library/Application Support/com.upnext.cleanup"
+else
+  default_log="${XDG_STATE_HOME:-$HOME/.local/state}/upnext/cleanup.log"
+  default_state="${XDG_STATE_HOME:-$HOME/.local/state}/upnext"
+fi
+LOG_FILE="${UPNEXT_CLEANUP_LOG:-$default_log}"
+STATE_DIR="${UPNEXT_CLEANUP_STATE:-$default_state}"
 # launchd appends to its log forever and has no rotation of its own, so the
 # wrapper caps it. Two generations at 1 MB bounds this at ~2 MB.
 MAX_LOG_BYTES=${UPNEXT_CLEANUP_MAX_LOG_BYTES:-1048576}
@@ -108,8 +116,11 @@ human_age() {
   _then=$(cat "$STATE_DIR/$1" 2>/dev/null | head -1)
   case $_then in '' | *[!0-9]*) printf 'unknown'; return ;; esac
   _age=$(( $(date +%s) - _then ))
-  printf '%s (%dh %dm ago)' "$(date -r "$_then" "+%Y-%m-%d %H:%M:%S" 2>/dev/null)" \
-    "$((_age / 3600))" "$(((_age % 3600) / 60))"
+  # -r is BSD, -d @ is GNU. Without both, this silently prints an empty date on
+  # Linux, which is exactly where the scheduled job runs in production.
+  _when=$(date -r "$_then" "+%Y-%m-%d %H:%M:%S" 2>/dev/null ||
+          date -d "@$_then" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "unknown time")
+  printf '%s (%dh %dm ago)' "$_when" "$((_age / 3600))" "$(((_age % 3600) / 60))"
 }
 
 if [ "${1:-}" = "--status" ]; then
@@ -198,8 +209,15 @@ ping_monitor "/start"
 # summary can be attached to the check-in, then replayed to the log.
 OUT_FILE=$(mktemp "${TMPDIR:-/tmp}/upnext-cleanup.XXXXXX")
 trap 'rm -f "$OUT_FILE"' EXIT INT TERM
+# Production images ship a precompiled bundle so the runtime needs neither the
+# TypeScript loader nor the source tree. Local checkouts fall back to running
+# the source directly.
 set +e
-"$NODE_BIN" --env-file-if-exists=.env --import tsx scripts/cleanup.ts > "$OUT_FILE" 2>&1
+if [ -f "$PROJECT_DIR/cleanup.mjs" ]; then
+  "$NODE_BIN" --env-file-if-exists=.env cleanup.mjs > "$OUT_FILE" 2>&1
+else
+  "$NODE_BIN" --env-file-if-exists=.env --import tsx scripts/cleanup.ts > "$OUT_FILE" 2>&1
+fi
 STATUS=$?
 set -e
 cat "$OUT_FILE"

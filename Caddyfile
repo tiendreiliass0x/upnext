@@ -1,0 +1,18 @@
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	# Previews are 40 MB before FFmpeg trims them, and the API rejects anything
+	# larger itself. Bounding it here keeps a hostile upload from reaching Node.
+	request_body {
+		max_size 45MB
+	}
+
+	reverse_proxy app:3000 {
+		# Building a 30-second preview spawns FFmpeg and can legitimately take a
+		# minute, which is far longer than a proxy would otherwise wait.
+		transport http {
+			read_timeout 300s
+			write_timeout 300s
+		}
+	}
+}

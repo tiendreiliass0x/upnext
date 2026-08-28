@@ -108,6 +108,41 @@ Objects are always removed from R2 before their database row, so an interrupted
 run leaves a row for the next run to retry rather than an object nothing points
 at. The job is safe to run while the app is serving traffic and safe to re-run.
 
+## Deploying
+
+The app needs a long-lived process, a writable disk and a real FFmpeg binary,
+so it runs as a container behind Caddy on any small VPS. `Dockerfile`,
+`docker-compose.yml` and `Caddyfile` are in the repo.
+
+Build on the server, not on your laptop. `better-sqlite3` and `ffmpeg-static`
+resolve to platform-specific binaries at install time, and a macOS build cannot
+run in a Linux image. Give the box at least 2 GB of RAM: `next build` is the
+memory-hungry step, not serving.
+
+```
+git clone <repo> /srv/upnext && cd /srv/upnext
+cp .env.example .env      # add R2 credentials
+# Without a domain, sslip.io turns an IP into a hostname:
+echo 'SITE_ADDRESS=203-0-113-4.sslip.io'        >> .env
+echo 'APP_PUBLIC_URL=https://203-0-113-4.sslip.io' >> .env
+docker compose up -d --build
+```
+
+Caddy obtains a certificate on first request, so the QR link is HTTPS with no
+further setup. sslip.io is a shared domain and Let's Encrypt rate-limits per
+registered domain, so if issuance fails you are queued behind other users of
+it — a cheap domain of your own avoids that permanently.
+
+Schedule cleanup from the host, since the container has no cron:
+
+```
+0 * * * * cd /srv/upnext && docker compose exec -T app ./scripts/run-cleanup.sh >> /var/log/upnext-cleanup.log 2>&1
+```
+
+**Do not scale the app service past one replica.** Vote counts live in a SQLite
+file and the upload concurrency limit is an in-process `Set`, so a second
+replica would split the limiter and corrupt the counts.
+
 ## Production
 
 Run the app as one long-lived Node process and set `SQLITE_PATH` to a mounted,
