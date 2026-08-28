@@ -8,6 +8,16 @@ export const previewBitrateKbps = 128;
 export const previewSampleRate = 44100;
 export const previewChannels = 2;
 
+// decodeAudioData expands the whole track to float32 PCM before we can trim
+// it: a 6-minute stereo track is ~64 MB decoded, a 12-minute one ~130 MB, and
+// a phone browser kills the tab well before that on older devices. Files above
+// this take the server path instead, which accepts up to 40 MB.
+export const maximumTrimBytes = 25 * 1024 * 1024;
+// Decode plus encode of a long track on a slow phone can run for a long time
+// with nothing to show for it. Past this, upload the original and let the
+// server do the work.
+export const trimBudgetMs = 15_000;
+
 const samplesPerFrame = 1152;
 // Yield to the event loop roughly every quarter second of audio so a long
 // encode does not freeze the setup screen.
@@ -23,14 +33,6 @@ function getAudioContextConstructor(): AudioContextConstructor | null {
   return scope.AudioContext ?? scope.webkitAudioContext ?? null;
 }
 
-/** Whether this browser can trim at all. Callers fall back to the server. */
-export function canTrimInBrowser() {
-  return (
-    getAudioContextConstructor() !== null &&
-    typeof OfflineAudioContext !== "undefined"
-  );
-}
-
 function toInt16(samples: Float32Array) {
   const out = new Int16Array(samples.length);
   for (let index = 0; index < samples.length; index += 1) {
@@ -42,8 +44,20 @@ function toInt16(samples: Float32Array) {
   return out;
 }
 
+class TrimBudgetExceeded extends Error {}
+
+function withDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return Promise.reject(new TrimBudgetExceeded());
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new TrimBudgetExceeded()), remaining);
+    promise.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
+}
+
 async function encodeMp3(
   buffer: AudioBuffer,
+  deadline: number,
   onProgress?: (fraction: number) => void,
 ) {
   const left = toInt16(buffer.getChannelData(0));
@@ -67,6 +81,7 @@ async function encodeMp3(
 
     sliceCount += 1;
     if (sliceCount % framesPerSlice === 0) {
+      if (Date.now() > deadline) throw new TrimBudgetExceeded();
       onProgress?.(offset / left.length);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
@@ -86,8 +101,9 @@ async function encodeMp3(
  * server still re-encodes with a hard 30 second limit, because a client is free
  * to send whatever it likes.
  *
- * Returns null whenever trimming is not possible or not worthwhile, and the
- * caller uploads the original file instead.
+ * Returns null whenever trimming is not possible, not worthwhile, too large to
+ * decode safely, or over its time budget; the caller uploads the original file
+ * instead.
  */
 export async function trimToPreview(
   file: File,
@@ -97,14 +113,19 @@ export async function trimToPreview(
   // size has no bandwidth left to save, so spending that is pure waste.
   const previewBytes = (previewSeconds * previewBitrateKbps * 1000) / 8;
   if (file.size <= previewBytes * 1.25) return null;
+  if (file.size > maximumTrimBytes) return null;
 
   const AudioContextCtor = getAudioContextConstructor();
   if (!AudioContextCtor || typeof OfflineAudioContext === "undefined") return null;
 
+  const deadline = Date.now() + trimBudgetMs;
   let context: AudioContext | null = null;
   try {
     context = new AudioContextCtor();
-    const decoded = await context.decodeAudioData(await file.arrayBuffer());
+    const decoded = await withDeadline(
+      context.decodeAudioData(await file.arrayBuffer()),
+      deadline,
+    );
 
     const seconds = Math.min(decoded.duration, previewSeconds);
     if (!Number.isFinite(seconds) || seconds <= 0) return null;
@@ -120,9 +141,9 @@ export async function trimToPreview(
     source.buffer = decoded;
     source.connect(offline.destination);
     source.start(0);
-    const rendered = await offline.startRendering();
+    const rendered = await withDeadline(offline.startRendering(), deadline);
 
-    const chunks = await encodeMp3(rendered, onProgress);
+    const chunks = await encodeMp3(rendered, deadline, onProgress);
     const blob = new Blob(chunks as BlobPart[], { type: "audio/mpeg" });
 
     // A file that did not get smaller is not worth swapping in; sending the
@@ -132,8 +153,8 @@ export async function trimToPreview(
     const name = file.name.replace(/\.[^.]+$/, "") || "preview";
     return new File([blob], `${name}.mp3`, { type: "audio/mpeg" });
   } catch {
-    // Unsupported codec, a decode failure, or no permission for an
-    // AudioContext. The server path still works.
+    // Unsupported codec, a decode failure, no permission for an AudioContext,
+    // or the time budget ran out. The server path still works.
     return null;
   } finally {
     await context?.close().catch(() => undefined);

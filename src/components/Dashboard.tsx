@@ -25,7 +25,7 @@ import {
 import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
-import { trimToPreview } from "@/lib/preview-client";
+import { readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
@@ -190,17 +190,6 @@ function getGuestLink(sessionId: string, baseUrl?: string | null) {
   return url.toString();
 }
 
-async function readJson<T>(response: Response): Promise<T> {
-  const text = await response.text();
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    // An HTML error page from a proxy, or a route that is not ready yet.
-    throw new Error(
-      `The server sent an unexpected response (${response.status}).`,
-    );
-  }
-}
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -753,10 +742,16 @@ export default function Dashboard({
         // Trim first so the upload carries ~470 KB instead of the whole track.
         // The server still re-encodes with its own 30 second limit, so a
         // browser that cannot do this loses bandwidth, never correctness.
-        setUploadProgress(
-          `Preparing preview ${index + 1} of ${tracksToUpload.length}`,
-        );
-        const trimmed = await trimToPreview(track.file);
+        const step = `${index + 1} of ${tracksToUpload.length}`;
+        setUploadProgress(`Preparing preview ${step}`);
+        // The encoder is loaded on demand so DJs who never upload a file
+        // (library-only sets) do not pay for it in the first load.
+        const { trimToPreview } = await import("@/lib/preview-client");
+        const trimmed = await trimToPreview(track.file, (fraction) => {
+          setUploadProgress(
+            `Preparing preview ${step} (${Math.round(fraction * 100)}%)`,
+          );
+        });
         setUploadProgress(
           `Uploading preview ${index + 1} of ${tracksToUpload.length}`,
         );

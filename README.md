@@ -56,7 +56,11 @@ original file and the server does the whole job, exactly as before.
 
 Trimming is skipped when the file is already at or below preview size, since
 encoding costs a second or two of device CPU and there would be no bandwidth
-left to save.
+left to save. It is also skipped for files over 25 MB: the browser has to
+decode the whole track to PCM before it can cut it, and a long lossless file
+decodes to more memory than a phone tab is allowed. If decoding and encoding
+together take longer than 15 seconds the browser gives up and uploads the
+original. In every one of these cases the server pass does the whole job.
 
 128 kbps stereo is deliberate rather than the smaller 96 kbps mono that would do
 for auditioning on a handset: these clips are meant to be playable out loud.

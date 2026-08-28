@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ListMusic, Plus, Trash2, Upload, X } from "lucide-react";
 import type { Library, LibraryTrack } from "@/lib/libraries";
-import { trimToPreview } from "@/lib/preview-client";
+import { readJson } from "@/lib/http-client";
 
 const adminTokenStorageKey = "upnext-admin-token";
 const accountTokenStorageKey = "upnext-account-token";
@@ -16,16 +16,6 @@ function readStorage(key: string) {
   }
 }
 
-async function readJson<T>(response: Response): Promise<T> {
-  const text = await response.text();
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(
-      `The server sent an unexpected response (${response.status}).`,
-    );
-  }
-}
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
@@ -250,6 +240,7 @@ export default function AdminLibraries() {
     // Trim first so the upload carries ~470 KB instead of the whole track. The
     // server re-encodes regardless, so a browser that cannot do this loses
     // bandwidth, never correctness.
+    const { trimToPreview } = await import("@/lib/preview-client");
     const trimmed = await trimToPreview(file);
     const form = new FormData();
     form.append("file", trimmed ?? file);

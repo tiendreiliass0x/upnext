@@ -2,10 +2,12 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  canTrimInBrowser,
+  maximumTrimBytes,
   previewBitrateKbps,
+  previewChannels,
   previewSampleRate,
   previewSeconds,
+  trimBudgetMs,
   trimToPreview,
 } from "@/lib/preview-client";
 
@@ -28,12 +30,15 @@ function audioBuffer(seconds: number, channels = 2) {
 function installAudio(options: {
   decoded?: ReturnType<typeof audioBuffer>;
   decodeRejects?: boolean;
+  decodeHangs?: boolean;
   renderSeconds?: number;
 } = {}) {
   const closed = { count: 0 };
   const decoded = options.decoded ?? audioBuffer(240);
+  const constructed: Array<[number, number, number]> = [];
   class FakeAudioContext {
     decodeAudioData() {
+      if (options.decodeHangs) return new Promise(() => {});
       return options.decodeRejects
         ? Promise.reject(new Error("unsupported codec"))
         : Promise.resolve(decoded);
@@ -44,11 +49,9 @@ function installAudio(options: {
     }
   }
   class FakeOfflineAudioContext {
-    constructor(
-      public channels: number,
-      public length: number,
-      public rate: number,
-    ) {}
+    constructor(channels: number, length: number, rate: number) {
+      constructed.push([channels, length, rate]);
+    }
     createBufferSource() {
       return { buffer: null, connect: () => {}, start: () => {} };
     }
@@ -58,7 +61,7 @@ function installAudio(options: {
   }
   vi.stubGlobal("AudioContext", FakeAudioContext);
   vi.stubGlobal("OfflineAudioContext", FakeOfflineAudioContext);
-  return { closed, FakeOfflineAudioContext };
+  return { closed, constructed };
 }
 
 function sourceFile(bytes: number, name = "Artist - Song.flac") {
@@ -70,9 +73,8 @@ afterEach(() => {
 });
 
 describe("browser preview trimming", () => {
-  it("reports that it cannot trim without the Web Audio APIs", async () => {
+  it("falls back without the Web Audio APIs", async () => {
     // jsdom has no AudioContext, which is exactly the fallback case.
-    expect(canTrimInBrowser()).toBe(false);
     expect(await trimToPreview(sourceFile(9_000_000))).toBeNull();
   });
 
@@ -93,14 +95,37 @@ describe("browser preview trimming", () => {
   }, 60_000);
 
   it("asks the renderer for exactly the preview window", async () => {
-    const { FakeOfflineAudioContext } = installAudio({ decoded: audioBuffer(600) });
-    const spy = vi.spyOn(FakeOfflineAudioContext.prototype, "createBufferSource");
+    const { constructed } = installAudio({ decoded: audioBuffer(600) });
 
     await trimToPreview(sourceFile(20_000_000));
 
-    // A ten minute source must still be cut to the preview length.
-    expect(spy).toHaveBeenCalled();
+    // A ten minute source must still be cut to the preview length, in the
+    // server's shape: stereo at 44.1 kHz.
+    expect(constructed).toEqual([
+      [previewChannels, previewSeconds * previewSampleRate, previewSampleRate],
+    ]);
   }, 60_000);
+
+  it("leaves a file too large to decode safely to the server", async () => {
+    const { closed } = installAudio();
+    expect(await trimToPreview(sourceFile(maximumTrimBytes + 1))).toBeNull();
+    // Never decoded: that is where the memory would have gone.
+    expect(closed.count).toBe(0);
+    expect(await trimToPreview(sourceFile(maximumTrimBytes))).not.toBeNull();
+  }, 60_000);
+
+  it("gives up and releases the context when decoding blows the time budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const { closed } = installAudio({ decodeHangs: true });
+      const pending = trimToPreview(sourceFile(9_000_000));
+      await vi.advanceTimersByTimeAsync(trimBudgetMs + 1);
+      expect(await pending).toBeNull();
+      expect(closed.count).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("does not spend CPU on a file already at preview size", async () => {
     const { closed } = installAudio();
