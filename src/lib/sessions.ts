@@ -191,7 +191,9 @@ export function createSession(input: {
         input.venue,
         input.accountId,
         hostKey,
-        input.requestId ?? null,
+        // An empty string is "no request ID", not a request ID; storing it
+        // would occupy the per-host unique index for every later blank one.
+        input.requestId || null,
         createdAt,
         expiresAt,
       );

@@ -512,3 +512,57 @@ describe("queue interactions", () => {
     ).toHaveAttribute("aria-pressed", "false");
   });
 });
+
+describe("review fixes", () => {
+  it("queues a catalogue song once even when it is added twice", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    const library = { id: "lib-1", name: "Deep House", description: "", trackCount: 1, createdAt: "" };
+    const libraryTracks = [
+      {
+        id: "lt-1", libraryId: "lib-1", title: "Sunrise", artist: "Kora",
+        previewUrl: "/api/library-tracks/lt-1/preview",
+        libraryPreviewKey: "previews/curator/sunrise.mp3",
+        contributedBy: null, createdAt: "",
+      },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/accounts") {
+          return Response.json({
+            account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" },
+          });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({ activeRoom: null, guestBaseUrl: null });
+        }
+        if (url === "/api/libraries") return Response.json({ libraries: [library] });
+        if (url.includes("/tracks")) return Response.json({ tracks: libraryTracks });
+        return Response.json({});
+      }),
+    );
+    render(<Dashboard />);
+
+    for (let round = 0; round < 2; round += 1) {
+      await user.click(await screen.findByRole("checkbox", { name: /sunrise/i }));
+      await user.click(screen.getByRole("button", { name: /add 1 song/i }));
+    }
+
+    expect(screen.getAllByRole("button", { name: /remove sunrise/i })).toHaveLength(1);
+  });
+
+  it("says why the profile is not loading instead of spinning silently", async () => {
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>502</html>", { status: 502 })),
+    );
+    render(<Dashboard />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/retrying/i);
+    expect(screen.getByRole("button", { name: /try again now/i })).toBeInTheDocument();
+  });
+});

@@ -142,7 +142,8 @@ memory-hungry step, not serving.
 
 `deploy/provision.sh` does the whole thing on a fresh Debian or Ubuntu box:
 swap if the RAM is tight, Docker, a firewall, the stack itself, and the hourly
-cleanup cron. It is idempotent, so re-run it to redeploy after a `git pull`.
+cleanup cron. It is idempotent, so re-run it to redeploy after a `git pull`;
+a hostname already in `.env` is kept unless you pass `--host` again.
 
 ```
 git clone <repo> /srv/upnext && cd /srv/upnext
@@ -170,11 +171,16 @@ further setup. sslip.io is a shared domain and Let's Encrypt rate-limits per
 registered domain, so if issuance fails you are queued behind other users of
 it — a cheap domain of your own avoids that permanently.
 
-Schedule cleanup from the host, since the container has no cron:
+Schedule cleanup from the host, since the container has no cron, and rotate
+its log there too (`provision.sh` installs both, plus an `/etc/logrotate.d`
+entry; the wrapper's own log cap only applies where it owns the log file):
 
 ```
 0 * * * * cd /srv/upnext && docker compose exec -T app ./scripts/run-cleanup.sh >> /var/log/upnext-cleanup.log 2>&1
 ```
+
+`docker-compose.yml` points `UPNEXT_CLEANUP_STATE` at the data volume so
+`run-cleanup.sh --status` survives a redeploy.
 
 **Do not scale the app service past one replica.** Vote counts live in a SQLite
 file and the upload concurrency limit is an in-process `Set`, so a second

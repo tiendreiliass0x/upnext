@@ -14,6 +14,8 @@ export type CleanupSummary = {
   deletedObjects: number;
   retriedObjects: number;
   deletedUploadRecords: number;
+  /** Objects removed from R2 whose row gained a reference mid-run. */
+  orphanedUploads: number;
   deletedAccountRequests: number;
   storageSkipped: boolean;
 };
@@ -53,6 +55,7 @@ export async function runCleanup(options: { now?: Date } = {}) {
     deletedObjects: 0,
     retriedObjects: 0,
     deletedUploadRecords: 0,
+    orphanedUploads: 0,
     deletedAccountRequests: 0,
     storageSkipped: false,
   };
@@ -140,14 +143,25 @@ export async function runCleanup(options: { now?: Date } = {}) {
   summary.retriedObjects = failed.length;
 
   if (deleted.length > 0) {
+    // The R2 round trip above is a window in which a DJ can still adopt one
+    // of these keys (canUseUpload only checks that the row exists). A row
+    // that gained a reference meanwhile is kept rather than tripping the
+    // foreign key and rolling back the whole batch; its object is already
+    // gone, so it is reported so the run does not look clean.
     const forget = database.prepare(
-      "DELETE FROM audio_uploads WHERE object_key = ?",
+      `DELETE FROM audio_uploads
+       WHERE object_key = ?
+         AND NOT EXISTS (SELECT 1 FROM tracks WHERE preview_key = audio_uploads.object_key)
+         AND NOT EXISTS (
+           SELECT 1 FROM library_tracks WHERE preview_key = audio_uploads.object_key
+         )`,
     );
     summary.deletedUploadRecords = database
       .transaction(() =>
         deleted.reduce((total, key) => total + forget.run(key).changes, 0),
       )
       .immediate();
+    summary.orphanedUploads = deleted.length - summary.deletedUploadRecords;
   }
 
   return summary;

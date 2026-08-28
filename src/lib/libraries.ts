@@ -164,11 +164,17 @@ export function addLibraryTrack(input: {
       if (!library) return null;
 
       // A caller could otherwise point a catalogue entry at any object key it
-      // guessed; only a real upload row may be referenced.
+      // guessed; only a real upload row may be referenced. A DJ may only
+      // contribute their own uploads: a library entry makes an object usable
+      // by everyone, so this is the one path that could launder a stranger's
+      // upload into the shared pool. Admins (no contributor) curate freely.
       if (input.previewKey) {
         const upload = database
-          .prepare("SELECT 1 FROM audio_uploads WHERE object_key = ?")
-          .get(input.previewKey);
+          .prepare(
+            `SELECT 1 FROM audio_uploads
+             WHERE object_key = ? AND (? IS NULL OR account_id = ?)`,
+          )
+          .get(input.previewKey, input.contributedBy, input.contributedBy);
         if (!upload) return "unknown_preview" as const;
       }
 

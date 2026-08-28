@@ -245,6 +245,8 @@ export default function Dashboard({
   const [identityStatus, setIdentityStatus] = useState<
     "loading" | "needed" | "ready"
   >("loading");
+  const [identityError, setIdentityError] = useState("");
+  const retryNowRef = useRef<(() => void) | null>(null);
   const [votedTrackIds, setVotedTrackIds] = useState<Set<string>>(new Set());
   const [pendingVotes, setPendingVotes] = useState<Set<string>>(new Set());
   const [isDragging, setIsDragging] = useState(false);
@@ -337,17 +339,35 @@ export default function Dashboard({
           setAccount(data.account);
           setAccountToken(savedToken);
           setIdentityStatus("ready");
+          setIdentityError("");
         }
-      } catch {
-        if (!cancelled) {
-          retryTimer = window.setTimeout(restoreAccount, 2000);
-        }
+      } catch (restoreError) {
+        if (cancelled) return;
+        // Keep retrying (a deploy restart is the usual cause), but say so:
+        // a silent spinner is indistinguishable from a hung page. Backing
+        // off keeps a long outage from hammering the box.
+        attempts += 1;
+        setIdentityError(
+          restoreError instanceof Error && restoreError.message
+            ? restoreError.message
+            : "Your profile could not be loaded.",
+        );
+        retryTimer = window.setTimeout(
+          restoreAccount,
+          Math.min(2000 * 2 ** (attempts - 1), 15000),
+        );
       }
     }
 
+    let attempts = 0;
+    retryNowRef.current = () => {
+      if (retryTimer) window.clearTimeout(retryTimer);
+      void restoreAccount();
+    };
     void restoreAccount();
     return () => {
       cancelled = true;
+      retryNowRef.current = null;
       if (retryTimer) window.clearTimeout(retryTimer);
     };
   }, []);
@@ -672,10 +692,9 @@ export default function Dashboard({
     setDraftTracks((current) => {
       const base = current.every((track) => track.source === "demo") ? [] : current;
       // A catalogue song already has its preview, so the same song twice would
-      // upload nothing but would still queue twice.
-      const known = new Set(
-        base.map((track) => track.previewKey ?? `${track.artist}-${track.title}`.toLowerCase()),
-      );
+      // upload nothing but would still queue twice. Library tracks keep the
+      // catalogue ID as their draft ID, so that is the key to compare on.
+      const known = new Set(base.map((track) => track.id));
       const additions: DraftTrack[] = [];
       for (const track of picked) {
         const key = track.id;
@@ -961,7 +980,11 @@ export default function Dashboard({
             UP/NEXT
           </span>
         </header>
-        <LoadingRoom label="Loading your profile" />
+        <LoadingRoom
+          label="Loading your profile"
+          error={identityError}
+          onRetry={() => retryNowRef.current?.()}
+        />
       </div>
     );
   }
@@ -2106,7 +2129,15 @@ export function IdentityGate({
   );
 }
 
-function LoadingRoom({ label }: { label: string }) {
+function LoadingRoom({
+  label,
+  error,
+  onRetry,
+}: {
+  label: string;
+  error?: string;
+  onRetry?: () => void;
+}) {
   return (
     <main className="loading-room page-shell" aria-live="polite">
       <div className="loading-mark">
@@ -2115,7 +2146,21 @@ function LoadingRoom({ label }: { label: string }) {
         <span />
       </div>
       <strong>{label}</strong>
-      <p>Syncing the latest queue...</p>
+      {error ? (
+        <p role="alert" className="loading-error">
+          {error} Retrying...
+          {onRetry ? (
+            <>
+              {" "}
+              <button type="button" className="link-button" onClick={onRetry}>
+                Try again now
+              </button>
+            </>
+          ) : null}
+        </p>
+      ) : (
+        <p>Syncing the latest queue...</p>
+      )}
       <div className="loading-rows" aria-hidden="true">
         <span />
         <span />

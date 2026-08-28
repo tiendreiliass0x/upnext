@@ -38,14 +38,6 @@ RUN bun run build
 RUN bun build scripts/cleanup.ts --target=node --outfile=cleanup.mjs \
       --external better-sqlite3
 
-# Production dependencies only. tsx is among them because the scheduled
-# cleanup job runs TypeScript directly.
-FROM node:22-slim AS prod-deps
-COPY --from=bunbin /usr/local/bin/bun /usr/local/bin/bun
-WORKDIR /app
-COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile --production
-
 FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \

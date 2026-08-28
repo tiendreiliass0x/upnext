@@ -651,3 +651,91 @@ describe("session API", () => {
     expect(afterSecond.session.votedTrackIds).toHaveLength(2);
   });
 });
+
+describe("review fixes", () => {
+  it("still creates an account on a browser whose voter ID belongs to someone else", async () => {
+    const voterId = "shared-phone-voter-0001";
+    const first = await saveAccount(
+      request("http://localhost/api/accounts", {
+        method: "POST",
+        voterId,
+        body: { phone: "+32470001111", pseudonym: "First" },
+      }),
+    );
+    expect(first.status).toBe(200);
+
+    // A second person on the same passed-around phone. They get an account;
+    // they simply have no anonymous vote to carry over.
+    const second = await saveAccount(
+      request("http://localhost/api/accounts", {
+        method: "POST",
+        voterId,
+        body: { phone: "+32470002222", pseudonym: "Second" },
+      }),
+    );
+    expect(second.status).toBe(200);
+    const created = await body<AccountResponse>(second);
+    expect(created.account.pseudonym).toBe("Second");
+
+    // Logging in on that browser still refuses to re-link the voter ID.
+    const login = await loginAccount(
+      request("http://localhost/api/accounts/login", {
+        method: "POST",
+        voterId,
+        body: { phone: "+32470002222" },
+      }),
+    );
+    expect(login.status).toBe(409);
+  });
+
+  it("throttles the unauthenticated account routes per address", async () => {
+    const attempt = (address: string) =>
+      loginAccount(
+        request("http://localhost/api/accounts/login", {
+          method: "POST",
+          headers: { "x-forwarded-for": address },
+          body: { phone: "+32470009999" },
+        }),
+      );
+    for (let index = 0; index < 20; index += 1) {
+      expect((await attempt("203.0.113.9")).status).toBe(404);
+    }
+    const limited = await attempt("203.0.113.9");
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toMatch(/^\d+$/);
+    // Another address is unaffected; signup shares the bucket.
+    expect((await attempt("203.0.113.10")).status).toBe(404);
+    expect(
+      (
+        await saveAccount(
+          request("http://localhost/api/accounts", {
+            method: "POST",
+            headers: { "x-forwarded-for": "203.0.113.9" },
+            body: { phone: "+32470008888", pseudonym: "Late" },
+          }),
+        )
+      ).status,
+    ).toBe(429);
+  });
+
+  it("treats a blank request ID as no request ID", async () => {
+    const host = await register("+32470007777", "Blank Host");
+    const open = () =>
+      createRoom(
+        request("http://localhost/api/sessions", {
+          method: "POST",
+          token: host.token,
+          body: {
+            name: "Room",
+            venue: "",
+            requestId: "",
+            tracks: [{ title: "T", artist: "A" }],
+          },
+        }),
+      );
+    expect((await open()).status).toBe(201);
+    // Before the fix the empty string was stored and the second room hit the
+    // per-host unique index.
+    expect((await open()).status).toBe(201);
+  });
+});

@@ -11,6 +11,9 @@ services:
     environment:
       # Overrides whatever .env says, so the database always lands on the volume.
       SQLITE_PATH: /data/dj-booth.sqlite
+      # Cleanup's last-success/last-failure markers must outlive the container,
+      # or --status reports "never" after every redeploy.
+      UPNEXT_CLEANUP_STATE: /data/cleanup-state
     volumes:
       - upnext-data:/data
     # No published port: Caddy is the only way in.

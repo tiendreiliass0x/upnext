@@ -119,6 +119,7 @@ describe("cleanup", () => {
       deletedRooms: 0,
       deletedObjects: 0,
       deletedUploadRecords: 0,
+      orphanedUploads: 0,
     });
     expect(storageMocks.deletePreviews).not.toHaveBeenCalled();
     expect(count("sessions")).toBe(1);
@@ -141,6 +142,7 @@ describe("cleanup", () => {
       deletedVotes: 1,
       deletedObjects: 1,
       deletedUploadRecords: 1,
+      orphanedUploads: 0,
       retriedObjects: 0,
       storageSkipped: false,
     });
@@ -204,6 +206,7 @@ describe("cleanup", () => {
     expect(summary).toMatchObject({
       deletedObjects: 1,
       deletedUploadRecords: 1,
+      orphanedUploads: 0,
     });
     expect(count("audio_uploads")).toBe(0);
   });
@@ -221,6 +224,7 @@ describe("cleanup", () => {
       deletedObjects: 0,
       retriedObjects: 1,
       deletedUploadRecords: 0,
+      orphanedUploads: 0,
     });
     // The row is the only record of the key, so losing it would orphan the object.
     expect(count("audio_uploads")).toBe(1);
@@ -240,6 +244,7 @@ describe("cleanup", () => {
       deletedObjects: 1,
       retriedObjects: 1,
       deletedUploadRecords: 1,
+      orphanedUploads: 0,
     });
     const remaining = getDatabase()
       .prepare("SELECT object_key FROM audio_uploads")
@@ -264,6 +269,7 @@ describe("cleanup", () => {
       storageSkipped: true,
       retriedObjects: 1,
       deletedUploadRecords: 0,
+      orphanedUploads: 0,
     });
     expect(count("sessions")).toBe(0);
     expect(count("audio_uploads")).toBe(1);
@@ -344,7 +350,36 @@ describe("cleanup", () => {
       deletedRooms: 0,
       deletedObjects: 0,
       deletedUploadRecords: 0,
+      orphanedUploads: 0,
     });
     expect(storageMocks.deletePreviews).not.toHaveBeenCalled();
+  });
+});
+
+describe("an upload adopted while cleanup is talking to R2", () => {
+  it("keeps its row, finishes the batch, and reports the orphan", async () => {
+    seedAccount("host", "+32470000000");
+    seedUpload("previews/host/adopted.mp3", ago(48));
+    seedUpload("previews/host/abandoned.mp3", ago(48));
+    storageMocks.deletePreviews.mockImplementation(async (keys: string[]) => {
+      // The DJ opens a room with the key during the network round trip.
+      seedRoom({ id: "LATE01", createdAt: ago(0), expiresAt: ahead(6) });
+      getDatabase()
+        .prepare(
+          `INSERT INTO tracks (id, session_id, title, artist, position, preview_key)
+           VALUES ('t1', 'LATE01', 'T', 'A', 0, 'previews/host/adopted.mp3')`,
+        )
+        .run();
+      return { deleted: keys, failed: [] };
+    });
+
+    const summary = await runCleanup({ now });
+
+    expect(summary).toMatchObject({
+      deletedObjects: 2,
+      deletedUploadRecords: 1,
+      orphanedUploads: 1,
+    });
+    expect(count("audio_uploads")).toBe(1);
   });
 });

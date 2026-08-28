@@ -5,11 +5,21 @@ import {
   normalizePhone,
   toPublicAccount,
 } from "@/lib/accounts";
+import {
+  getClientAddress,
+  rateLimitedResponse,
+  takeRateLimit,
+} from "@/lib/rate-limit";
 import { getAnonymousVoterId } from "@/lib/voters";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  // This route is an oracle (404 unknown number, 200 + token known number),
+  // so it is throttled per address; see rate-limit.ts.
+  const retryAfter = takeRateLimit("accounts", getClientAddress(request));
+  if (retryAfter !== null) return rateLimitedResponse(retryAfter);
+
   try {
     const body = (await request.json()) as { phone?: unknown };
     const phone =

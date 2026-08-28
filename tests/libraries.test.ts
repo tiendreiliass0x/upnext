@@ -188,3 +188,48 @@ describe("library previews are usable across accounts", () => {
     expect(room.session.tracks[0].previewUrl).toBeNull();
   });
 });
+
+describe("contributing to a library", () => {
+  it("lets a DJ contribute only their own uploads", () => {
+    const owner = account("+32470100001");
+    const stranger = account("+32470100002");
+    const library = createLibrary({ name: "L", description: "" });
+    upload("previews/owner/mine.mp3", owner.id);
+
+    expect(
+      addLibraryTrack({
+        libraryId: library.id,
+        title: "Laundered",
+        artist: "A",
+        previewKey: "previews/owner/mine.mp3",
+        contributedBy: stranger.id,
+      }),
+    ).toBe("unknown_preview");
+
+    expect(
+      addLibraryTrack({
+        libraryId: library.id,
+        title: "Mine",
+        artist: "A",
+        previewKey: "previews/owner/mine.mp3",
+        contributedBy: owner.id,
+      }),
+    ).toMatchObject({ title: "Mine" });
+  });
+
+  it("lets an admin catalogue any upload", () => {
+    const owner = account("+32470100003");
+    const library = createLibrary({ name: "L", description: "" });
+    upload("previews/owner/theirs.mp3", owner.id);
+
+    expect(
+      addLibraryTrack({
+        libraryId: library.id,
+        title: "Curated",
+        artist: "A",
+        previewKey: "previews/owner/theirs.mp3",
+        contributedBy: null,
+      }),
+    ).toMatchObject({ title: "Curated" });
+  });
+});

@@ -6,8 +6,14 @@ import {
   normalizePhone,
   toPublicAccount,
   updateAccountPseudonym,
+  voterLinkedElsewhereMessage,
 } from "@/lib/accounts";
 import { getAccountFromRequest } from "@/lib/auth";
+import {
+  getClientAddress,
+  rateLimitedResponse,
+  takeRateLimit,
+} from "@/lib/rate-limit";
 import {
   getAnonymousVoterId,
   normalizeAnonymousVoterId,
@@ -25,6 +31,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  const retryAfter = takeRateLimit("accounts", getClientAddress(request));
+  if (retryAfter !== null) return rateLimitedResponse(retryAfter);
+
   try {
     const body = (await request.json()) as {
       phone?: unknown;
@@ -99,6 +108,9 @@ export async function POST(request: Request) {
       token: account.authToken,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === voterLinkedElsewhereMessage) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
     if (
       error instanceof Error &&
       error.message.toLowerCase().includes("unique")

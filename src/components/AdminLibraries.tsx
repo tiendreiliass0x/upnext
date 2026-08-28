@@ -19,6 +19,24 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
+async function fileFingerprint(file: File) {
+  const input = new TextEncoder().encode(
+    `${file.name}\u0000${file.size}\u0000${file.lastModified}`,
+  );
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", input);
+    return Array.from(new Uint8Array(digest).slice(0, 16))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    // subtle is absent on insecure origins; a weaker hash still beats a
+    // raw filename, and it only has to be stable and ASCII.
+    let hash = 0;
+    for (const byte of input) hash = (hash * 31 + byte) >>> 0;
+    return `${hash.toString(16)}-${file.size}`;
+  }
+}
+
 export default function AdminLibraries() {
   const [adminToken, setAdminToken] = useState("");
   const [tokenDraft, setTokenDraft] = useState("");
@@ -143,6 +161,12 @@ export default function AdminLibraries() {
   }
 
   async function removeLibrary(library: Library) {
+    // Deleting cascades to every song in it, and the trash icon sits beside
+    // the select button, so a misclick must not wipe a curated catalogue.
+    const songs = library.trackCount === 1 ? "1 song" : `${library.trackCount} songs`;
+    if (!window.confirm(`Delete "${library.name}" and the ${songs} in it? This cannot be undone.`)) {
+      return;
+    }
     setIsBusy(true);
     setError("");
     try {
@@ -178,57 +202,79 @@ export default function AdminLibraries() {
     setIsBusy(true);
     setError("");
     const list = Array.from(files);
+    // One bad file must not abandon the rest of the batch, or the operator
+    // re-drops everything and re-uploads what already landed.
+    const failures: string[] = [];
     try {
       for (let index = 0; index < list.length; index += 1) {
         const file = list[index];
         setStatus(`Creating preview ${index + 1} of ${list.length}`);
-        const form = new FormData();
-        form.append("file", file);
-        const uploaded = await fetch("/api/uploads", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accountToken}`,
-            "x-upnext-upload-id": `admin-${selectedId}-${file.name}-${file.size}`,
-          },
-          body: form,
-        });
-        const uploadData = (await uploaded.json()) as {
-          previewKey?: string;
-          error?: string;
-        };
-        if (!uploaded.ok || !uploadData.previewKey) {
-          throw new Error(uploadData.error || `${file.name} could not be processed.`);
-        }
-
-        const base = file.name.replace(/\.[^.]+$/, "");
-        const [maybeArtist, ...rest] = base.split(" - ");
-        const added = await fetch(
-          `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
-          {
-            method: "POST",
-            headers: authHeaders({
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${accountToken}`,
-            }),
-            body: JSON.stringify({
-              title: rest.length > 0 ? rest.join(" - ") : base,
-              artist: rest.length > 0 ? maybeArtist : "Unknown artist",
-              previewKey: uploadData.previewKey,
-            }),
-          },
-        );
-        if (!added.ok) {
-          const data = (await added.json()) as { error?: string };
-          throw new Error(data.error || `${file.name} could not be catalogued.`);
+        try {
+          await uploadOne(file);
+        } catch (fileError) {
+          failures.push(`${file.name}: ${errorMessage(fileError)}`);
         }
       }
-      setStatus(`Added ${list.length} song${list.length === 1 ? "" : "s"}.`);
+      const added = list.length - failures.length;
+      setStatus(`Added ${added} song${added === 1 ? "" : "s"}.`);
+      if (failures.length > 0) {
+        setError(
+          `${failures.length} of ${list.length} could not be added.\n${failures.join("\n")}`,
+        );
+      }
       await Promise.all([loadTracks(), loadLibraries()]);
     } catch (uploadError) {
       setError(errorMessage(uploadError));
     } finally {
       setIsBusy(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function uploadOne(file: File) {
+    const form = new FormData();
+    form.append("file", file);
+    const uploaded = await fetch("/api/uploads", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accountToken}`,
+        // Header values must be Latin-1 and the server ignores IDs over 100
+        // characters, so a filename cannot go in directly: a Japanese title
+        // would throw before the request left the browser and a long one
+        // would silently lose idempotency. A hash of the same inputs is
+        // short, ASCII, and stable across a re-drop of the same file.
+        "x-upnext-upload-id": `admin-${selectedId}-${await fileFingerprint(file)}`,
+      },
+      body: form,
+    });
+    const uploadData = (await uploaded.json()) as {
+      previewKey?: string;
+      error?: string;
+    };
+    if (!uploaded.ok || !uploadData.previewKey) {
+      throw new Error(uploadData.error || "could not be processed.");
+    }
+
+    const base = file.name.replace(/\.[^.]+$/, "");
+    const [maybeArtist, ...rest] = base.split(" - ");
+    const added = await fetch(
+      `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
+      {
+        method: "POST",
+        headers: authHeaders({
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accountToken}`,
+        }),
+        body: JSON.stringify({
+          title: rest.length > 0 ? rest.join(" - ") : base,
+          artist: rest.length > 0 ? maybeArtist : "Unknown artist",
+          previewKey: uploadData.previewKey,
+        }),
+      },
+    );
+    if (!added.ok) {
+      const data = (await added.json()) as { error?: string };
+      throw new Error(data.error || "could not be catalogued.");
     }
   }
 
@@ -408,7 +454,6 @@ export default function AdminLibraries() {
                   type="file"
                   multiple
                   accept="audio/*"
-                  hidden
                   disabled={isBusy || !accountToken}
                   onChange={(event) => void uploadSongs(event.target.files)}
                 />

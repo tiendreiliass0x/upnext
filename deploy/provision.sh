@@ -107,11 +107,27 @@ else
   run systemctl enable --now docker
 fi
 
+# ----------------------------------------------------------------- .env file
+say "Checking configuration"
+ENV_FILE="$APP_DIR/.env"
+if [ ! -f "$ENV_FILE" ]; then
+  run cp "$APP_DIR/.env.example" "$ENV_FILE"
+  info "Created .env from .env.example."
+fi
+# It will hold R2 secrets and ADMIN_TOKEN, so nobody else on the box reads it.
+run chmod 600 "$ENV_FILE"
+
 # ------------------------------------------------------------------ hostname
 say "Working out the public hostname"
+EXISTING_HOST=$(sed -n 's/^[[:space:]]*SITE_ADDRESS[[:space:]]*=[[:space:]]*//p' "$ENV_FILE" 2>/dev/null | head -1 | tr -d '"')
 if [ -n "$HOSTNAME_ARG" ]; then
   SITE_HOST="$HOSTNAME_ARG"
   info "Using --host: $SITE_HOST"
+elif [ -n "$EXISTING_HOST" ]; then
+  # A bare re-run is the documented redeploy path. Re-deriving an sslip.io
+  # name here would overwrite a real domain and invalidate every printed QR.
+  SITE_HOST="$EXISTING_HOST"
+  info "Keeping SITE_ADDRESS from .env: $SITE_HOST (pass --host to change it)"
 else
   # Read the address off the default route rather than asking an outside
   # service, so provisioning needs no third party.
@@ -125,14 +141,6 @@ else
   info "Derived from $PUBLIC_IP: $SITE_HOST"
   info "sslip.io is a shared domain and Let's Encrypt rate-limits per domain."
   info "If certificate issuance fails, a domain of your own fixes it permanently."
-fi
-
-# ----------------------------------------------------------------- .env file
-say "Checking configuration"
-ENV_FILE="$APP_DIR/.env"
-if [ ! -f "$ENV_FILE" ]; then
-  run cp "$APP_DIR/.env.example" "$ENV_FILE"
-  info "Created .env from .env.example."
 fi
 
 set_env() {
@@ -152,12 +160,17 @@ info "SITE_ADDRESS and APP_PUBLIC_URL set to $SITE_HOST"
 # build a room whose uploads fail at the last step.
 if [ "$DRY_RUN" = 0 ]; then
   missing=""
-  for key in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
+  for key in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY; do
     grep -qE "^[[:space:]]*${key}=.+" "$ENV_FILE" || missing="$missing $key"
   done
   if [ -n "$missing" ]; then
     die "Missing in $ENV_FILE:$missing
 Add your Cloudflare R2 credentials, then run this script again."
+  fi
+  # A leftover placeholder is a non-empty value, so the app would use it
+  # verbatim and every upload would fail on a host that does not resolve.
+  if grep -qE "^[[:space:]]*R2_[A-Z_]+=.*(ACCOUNT_ID|YOUR_|CHANGE_ME|xxx)" "$ENV_FILE"; then
+    die "$ENV_FILE still contains a placeholder in an R2_* value. Fill it in or leave it empty."
   fi
   info "R2 credentials present."
 fi
@@ -168,8 +181,14 @@ if [ "$SKIP_FIREWALL" = 1 ]; then
 else
   say "Configuring the firewall"
   run apt-get install -y -qq ufw
-  # SSH first and always: a firewall enabled without it locks you out.
+  # SSH first and always: a firewall enabled without it locks you out. Allow
+  # the port sshd actually listens on, not just 22, or a non-standard port
+  # keeps this session alive and refuses the next one.
   run ufw allow 22/tcp
+  SSH_PORT=$(sshd -T 2>/dev/null | awk '/^port /{print $2; exit}')
+  if [ -n "$SSH_PORT" ] && [ "$SSH_PORT" != 22 ]; then
+    run ufw allow "$SSH_PORT/tcp"
+  fi
   run ufw allow 80/tcp
   run ufw allow 443/tcp
   run ufw --force enable
@@ -189,6 +208,19 @@ else
   printf '# Reclaims expired rooms and the R2 previews they hold open.\n%s\n' "$CRON_LINE" > "$CRON_FILE"
   chmod 0644 "$CRON_FILE"
   info "Hourly cleanup installed at $CRON_FILE"
+  # The wrapper rotates its own log file on a laptop; here cron owns the
+  # redirect, so the host has to bound it.
+  cat > /etc/logrotate.d/upnext-cleanup <<'LOGROTATE'
+/var/log/upnext-cleanup.log {
+    size 1M
+    rotate 2
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+LOGROTATE
+  info "Log rotation installed at /etc/logrotate.d/upnext-cleanup"
 fi
 
 # -------------------------------------------------------------------- verify

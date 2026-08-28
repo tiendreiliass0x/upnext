@@ -2,6 +2,8 @@
 .env
 .env.*
 !.env.example
+# Load-bearing: `next build` traces the default SQLITE_PATH and would copy a
+# developer's database (phone numbers included) into .next/standalone/data.
 data
 coverage
 internal-thoughts
