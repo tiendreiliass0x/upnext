@@ -127,7 +127,13 @@ export async function POST(request: Request) {
       uploadedObjectKey,
       Readable.fromWeb(file.stream() as import("node:stream/web").ReadableStream),
       format.contentType,
-      { contentLength: file.size, signal: request.signal },
+      // Deliberately not tied to request.signal. By this point the whole body
+      // has been received and paid for over venue wifi; if the connection
+      // drops during the PUT, finishing and registering it makes the DJ's
+      // retry (same upload ID) instant instead of another 60 MB. If they
+      // really left, cleanup reaps the unreferenced object after the grace
+      // period.
+      { contentLength: file.size },
     );
     registerAudioUpload({
       objectKey: uploadedObjectKey,

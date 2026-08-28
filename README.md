@@ -63,9 +63,11 @@ because every later Range request reuses the same URL.
 The upload limit is 60 MB per file (a long lossless track), and Caddy's
 `request_body.max_size` sits just above it so the proxy never answers a 413
 before the app can explain one. The body streams to R2 with its length
-declared rather than being buffered a second time, the request's abort signal
-cancels the PUT when the DJ navigates away, and uploads are serialized per
-account so a burst cannot exhaust a small VPS.
+declared rather than being buffered a second time, and uploads are serialized
+per account so a burst cannot exhaust a small VPS. A dropped connection does
+*not* cancel the PUT: by then the body has already been received, so finishing
+and registering it makes the DJ's retry (same upload ID) instant rather than
+another 60 MB, and cleanup reaps it if they never come back.
 
 Storage is the cost that scales, and a library track pins its upload for good,
 so each account has a ceiling: **1 GB by default** (`UPLOAD_QUOTA_MB`), about

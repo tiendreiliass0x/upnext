@@ -110,13 +110,13 @@ describe("upload API", () => {
       new RegExp(`^audio/${account.id}/.+\\.mp3$`),
     );
     // The body streams to R2 with its length declared, rather than being
-    // buffered a second time; the request's own signal rides along.
+    // buffered a second time. No abort signal: a dropped connection must not
+    // throw away a body that has already arrived.
     const [key, body, contentType, options] = mediaMocks.uploadPreview.mock.calls[0];
     expect(key).toBe(firstBody.previewKey);
     expect(typeof (body as { pipe?: unknown }).pipe).toBe("function");
     expect(contentType).toBe("audio/mpeg");
-    expect(options).toMatchObject({ contentLength: mp3Bytes.length });
-    expect((options as { signal?: unknown }).signal).toBeInstanceOf(AbortSignal);
+    expect(options).toEqual({ contentLength: mp3Bytes.length });
     expect(getAudioUploadByRequest(account.id, "stable-upload")).toBe(
       firstBody.previewKey,
     );

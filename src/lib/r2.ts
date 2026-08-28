@@ -49,7 +49,7 @@ export async function uploadPreview(
   objectKey: string,
   body: Buffer | Readable,
   contentType = "audio/mpeg",
-  options: { contentLength?: number; signal?: AbortSignal } = {},
+  options: { contentLength?: number } = {},
 ) {
   const { bucket } = getR2Configuration();
   await getR2Client().send(
@@ -61,7 +61,6 @@ export async function uploadPreview(
       ContentLength: options.contentLength,
       CacheControl: "private, max-age=31536000, immutable",
     }),
-    { abortSignal: options.signal },
   );
 }
 
