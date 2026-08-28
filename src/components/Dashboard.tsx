@@ -25,6 +25,7 @@ import {
 import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
+import { trimToPreview } from "@/lib/preview-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
@@ -749,11 +750,18 @@ export default function Dashboard({
       for (let index = 0; index < tracksToUpload.length; index += 1) {
         const track = tracksToUpload[index];
         if (!track.file) continue;
+        // Trim first so the upload carries ~470 KB instead of the whole track.
+        // The server still re-encodes with its own 30 second limit, so a
+        // browser that cannot do this loses bandwidth, never correctness.
         setUploadProgress(
-          `Creating preview ${index + 1} of ${tracksToUpload.length}`,
+          `Preparing preview ${index + 1} of ${tracksToUpload.length}`,
+        );
+        const trimmed = await trimToPreview(track.file);
+        setUploadProgress(
+          `Uploading preview ${index + 1} of ${tracksToUpload.length}`,
         );
         const formData = new FormData();
-        formData.append("file", track.file);
+        formData.append("file", trimmed ?? track.file);
         const uploadResponse = await fetchWithTimeout(
           "/api/uploads",
           {

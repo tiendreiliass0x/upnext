@@ -19,6 +19,11 @@ previews, and vote the queue into order.
 SQLite defaults to `data/dj-booth.sqlite`. The directory and database are
 created automatically.
 
+Stop `bun run dev` before running `bun run build`. Both write `.next`, and a
+build that runs alongside the dev server fails with `Cannot find module for
+page` on whichever routes the dev server happened to be rewriting. Nothing is
+wrong with the code when that happens.
+
 Set `APP_PUBLIC_URL` to the address guests will use. Guest links and the QR
 code are built from it. Without it they fall back to whatever address the DJ
 opened the booth on, and that address is usually wrong for guests: a LAN IP
@@ -34,6 +39,27 @@ runtime: `better-sqlite3` ships a Node-ABI native binding that bun's runtime
 refuses to load, so Next.js, Vitest and the cleanup script all execute under
 Node. `bun run <script>` is the right way to invoke them — it resolves the
 binary and spawns it under Node.
+
+## Preview Encoding
+
+Uploads are trimmed to a 30-second, 128 kbps stereo MP3 **in the browser**
+before they are sent, so a 9 MB track leaves the DJ's device as roughly 470 KB.
+On venue wifi that is the difference between a set that uploads in seconds and
+one that does not.
+
+The server re-encodes every upload with its own hard 30-second limit regardless.
+Browser trimming is a bandwidth and memory optimisation, never a trust boundary:
+a client can send whatever it likes, and only the server pass guarantees that
+what reaches R2 is a 30-second clip. That also means the fallback is automatic —
+a browser that cannot decode the codec, or has no Web Audio support, uploads the
+original file and the server does the whole job, exactly as before.
+
+Trimming is skipped when the file is already at or below preview size, since
+encoding costs a second or two of device CPU and there would be no bandwidth
+left to save.
+
+128 kbps stereo is deliberate rather than the smaller 96 kbps mono that would do
+for auditioning on a handset: these clips are meant to be playable out loud.
 
 ## Song Libraries
 

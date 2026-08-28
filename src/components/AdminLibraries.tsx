@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ListMusic, Plus, Trash2, Upload, X } from "lucide-react";
 import type { Library, LibraryTrack } from "@/lib/libraries";
+import { trimToPreview } from "@/lib/preview-client";
 
 const adminTokenStorageKey = "upnext-admin-token";
 const accountTokenStorageKey = "upnext-account-token";
@@ -243,8 +244,15 @@ export default function AdminLibraries() {
   }
 
   async function uploadOne(file: File) {
+    // Fingerprint the original, not the trimmed bytes, so a retry after a
+    // failure still matches the first attempt's idempotency key.
+    const uploadId = `admin-${selectedId}-${await fileFingerprint(file)}`;
+    // Trim first so the upload carries ~470 KB instead of the whole track. The
+    // server re-encodes regardless, so a browser that cannot do this loses
+    // bandwidth, never correctness.
+    const trimmed = await trimToPreview(file);
     const form = new FormData();
-    form.append("file", file);
+    form.append("file", trimmed ?? file);
     const uploaded = await fetch("/api/uploads", {
       method: "POST",
       headers: {
@@ -254,7 +262,7 @@ export default function AdminLibraries() {
         // would throw before the request left the browser and a long one
         // would silently lose idempotency. A hash of the same inputs is
         // short, ASCII, and stable across a re-drop of the same file.
-        "x-upnext-upload-id": `admin-${selectedId}-${await fileFingerprint(file)}`,
+        "x-upnext-upload-id": uploadId,
       },
       body: form,
     });
