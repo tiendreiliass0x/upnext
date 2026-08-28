@@ -566,3 +566,67 @@ describe("review fixes", () => {
     expect(screen.getByRole("button", { name: /try again now/i })).toBeInTheDocument();
   });
 });
+
+describe("starting a room from a playlist", () => {
+  function mountWithPlaylist(playlistResponse: () => Response) {
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === "/api/accounts") {
+        return Response.json({
+          account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" },
+        });
+      }
+      if (url === "/api/sessions") {
+        if (init?.method === "POST") throw new Error("no room should be created");
+        return Response.json({ activeRoom: null, guestBaseUrl: null });
+      }
+      if (url === "/api/playlists/pl-1") return playlistResponse();
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard initialPlaylistId="pl-1" />);
+    return fetchMock;
+  }
+
+  it("seeds the room name and draft from the playlist without creating a room", async () => {
+    const fetchMock = mountWithPlaylist(() =>
+      Response.json({
+        playlist: { id: "pl-1", name: "Warm Up Set" },
+        tracks: [
+          {
+            id: "lt-1",
+            libraryId: "lib",
+            title: "Essence",
+            artist: "Wizkid",
+            previewUrl: "/api/library-tracks/lt-1/preview",
+            libraryPreviewKey: "previews/essence.mp3",
+            contributedBy: null,
+            createdAt: "2026-08-26T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+
+    expect(
+      await screen.findByDisplayValue("Warm Up Set", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Essence")).toBeInTheDocument();
+    expect(screen.queryByText("NUEVAYoL")).not.toBeInTheDocument();
+    const roomCreations = fetchMock.mock.calls.filter(
+      ([input, init]) =>
+        String(input) === "/api/sessions" && init?.method === "POST",
+    );
+    expect(roomCreations).toHaveLength(0);
+  });
+
+  it("keeps the demo draft and explains when the playlist is not the DJ's", async () => {
+    mountWithPlaylist(() =>
+      Response.json({ error: "That playlist could not be found." }, { status: 404 }),
+    );
+    expect(
+      await screen.findByText("That playlist could not be found.", {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Friday After Dark")).toBeInTheDocument();
+  });
+});

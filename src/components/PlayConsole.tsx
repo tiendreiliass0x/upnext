@@ -402,6 +402,14 @@ export default function PlayConsole() {
         <section className="play-main">
           <div className="play-main-head">
             <h1>{activePlaylist ? activePlaylist.name : "Catalogue"}</h1>
+            {activePlaylist && rows.length > 0 && (
+              <Link
+                className="primary-button"
+                href={`/?playlist=${encodeURIComponent(activePlaylist.id)}`}
+              >
+                Start a room from this playlist
+              </Link>
+            )}
             {view.kind === "search" && (
               <input
                 type="search"

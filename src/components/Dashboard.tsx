@@ -225,10 +225,13 @@ function disposeAudio(audio: HTMLAudioElement) {
 
 export default function Dashboard({
   initialSessionId = "",
+  initialPlaylistId = "",
 }: {
   initialSessionId?: string;
+  initialPlaylistId?: string;
 }) {
   const sharedSessionId = initialSessionId.trim().toUpperCase().slice(0, 40);
+  const seedPlaylistId = initialPlaylistId.trim().slice(0, 100);
   const [view, setView] = useState<AppView>(sharedSessionId ? "guest" : "dj");
   const [joinedViaLink, setJoinedViaLink] = useState(Boolean(sharedSessionId));
   const [isLive, setIsLive] = useState(Boolean(sharedSessionId));
@@ -275,6 +278,7 @@ export default function Dashboard({
     null,
   );
   const sessionTagRef = useRef<{ id: string; tag: string } | null>(null);
+  const playlistSeededRef = useRef(false);
   activeSessionIdRef.current = activeSessionId;
 
   useEffect(() => {
@@ -420,6 +424,71 @@ export default function Dashboard({
       cancelled = true;
     };
   }, [accountToken, identityStatus, sharedSessionId]);
+
+  // /play hands over here with ?playlist=<id>. The draft is seeded from the
+  // playlist instead of a room being created outright, so the DJ still names
+  // the room, can reorder or drop songs, and an existing live room is never
+  // silently joined by a second one.
+  useEffect(() => {
+    if (
+      !seedPlaylistId ||
+      sharedSessionId ||
+      identityStatus !== "ready" ||
+      !accountToken ||
+      playlistSeededRef.current
+    ) {
+      return;
+    }
+    playlistSeededRef.current = true;
+
+    let cancelled = false;
+    async function seedFromPlaylist() {
+      try {
+        const response = await fetchWithTimeout(
+          `/api/playlists/${encodeURIComponent(seedPlaylistId)}`,
+          { headers: { Authorization: `Bearer ${accountToken}` } },
+        );
+        const data = await readJson<{
+          playlist?: { id: string; name: string };
+          tracks?: LibraryTrack[];
+          error?: string;
+        }>(response);
+        if (cancelled) return;
+        if (!response.ok || !data.playlist || !data.tracks) {
+          setError(data.error || "That playlist could not be found.");
+          return;
+        }
+        if (data.tracks.length === 0) {
+          setError("That playlist has no songs yet. Add some in Play first.");
+          return;
+        }
+        setSessionName(data.playlist.name.slice(0, 80));
+        setDraftTracks(
+          data.tracks.slice(0, 200).map((track) => ({
+            id: track.id,
+            title: track.title,
+            artist: track.artist,
+            source: "library",
+            previewKey: track.libraryPreviewKey ?? undefined,
+          })),
+        );
+        setError("");
+      } catch (requestError) {
+        if (!cancelled) {
+          setError(
+            requestError instanceof Error
+              ? requestError.message
+              : "The playlist could not be loaded.",
+          );
+        }
+      }
+    }
+
+    void seedFromPlaylist();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountToken, identityStatus, seedPlaylistId, sharedSessionId]);
 
   // Kept in an effect rather than derived during render: getGuestLink reads
   // window.location, which does not exist while this component is server

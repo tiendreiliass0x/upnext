@@ -99,6 +99,13 @@ exists is not information they are entitled to. A playlist points at catalogue
 entries rather than copying them, so when an admin removes a song it leaves
 every playlist that held it; removal stays a real moderation lever.
 
+"Start a room from this playlist" opens the booth at `/?playlist=<id>` with the
+draft seeded from the playlist: the room takes the playlist's name and its
+songs, already carrying their catalogue previews so nothing re-uploads. The DJ
+can still rename, reorder, or drop songs before going live; the room is not
+created until they do, which is also why an existing live room is never
+doubled by a second one.
+
 The preview endpoint is account-gated and an `<audio>` element cannot send a
 bearer header, so the player asks for the signed URL as JSON (`?as=json`) and
 sets that on the element. The redirect form still works for anything that
