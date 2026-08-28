@@ -1,15 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mediaMocks = vi.hoisted(() => ({
-  createPreview: vi.fn(),
   uploadPreview: vi.fn(),
   deletePreview: vi.fn(),
   getPreviewUrl: vi.fn(),
 }));
 
-vi.mock("@/lib/audio", () => ({
-  createThirtySecondPreview: mediaMocks.createPreview,
-}));
 vi.mock("@/lib/r2", () => ({
   uploadPreview: mediaMocks.uploadPreview,
   deletePreview: mediaMocks.deletePreview,
@@ -34,11 +30,12 @@ function uploadRequest(input: {
   uploadId?: string;
   contentLength?: string | null;
   name?: string;
+  body?: Uint8Array;
 }) {
   const formData = new FormData();
   formData.append(
     "file",
-    new File([Buffer.from("test audio")], input.name ?? "track.mp3", {
+    new File([Buffer.from(input.body ?? mp3Bytes)], input.name ?? "track.mp3", {
       type: "audio/mpeg",
     }),
   );
@@ -55,13 +52,16 @@ function uploadRequest(input: {
   });
 }
 
+const mp3Bytes = new Uint8Array([
+  0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xfb, 0x90, 0x00, 0, 0,
+]);
+
 async function json<T>(response: Response) {
   return (await response.json()) as T;
 }
 
 describe("upload API", () => {
   beforeEach(() => {
-    mediaMocks.createPreview.mockResolvedValue(Buffer.from("30-second-preview"));
     mediaMocks.uploadPreview.mockResolvedValue(undefined);
     mediaMocks.deletePreview.mockResolvedValue(undefined);
     mediaMocks.getPreviewUrl.mockResolvedValue(
@@ -83,15 +83,15 @@ describe("upload API", () => {
     const oversized = await upload(
       uploadRequest({
         token: account.authToken,
-        contentLength: String(42 * 1024 * 1024),
+        contentLength: String(62 * 1024 * 1024),
       }),
     );
     expect(unbounded.status).toBe(411);
     expect(oversized.status).toBe(413);
-    expect(mediaMocks.createPreview).not.toHaveBeenCalled();
+    expect(mediaMocks.uploadPreview).not.toHaveBeenCalled();
   });
 
-  it("trims, uploads, registers, and deduplicates a retry", async () => {
+  it("stores the file as sent, registers it, and deduplicates a retry", async () => {
     const account = createAccount({
       phone: "+32470000041",
       pseudonym: "Uploader",
@@ -105,12 +105,12 @@ describe("upload API", () => {
     const firstBody = await json<{ previewKey: string }>(first);
     expect(first.status).toBe(200);
     expect(firstBody.previewKey).toMatch(
-      new RegExp(`^previews/${account.id}/.+\\.mp3$`),
+      new RegExp(`^audio/${account.id}/.+\\.mp3$`),
     );
-    expect(mediaMocks.createPreview).toHaveBeenCalledTimes(1);
     expect(mediaMocks.uploadPreview).toHaveBeenCalledWith(
       firstBody.previewKey,
-      Buffer.from("30-second-preview"),
+      Buffer.from(mp3Bytes),
+      "audio/mpeg",
     );
     expect(getAudioUploadByRequest(account.id, "stable-upload")).toBe(
       firstBody.previewKey,
@@ -123,8 +123,22 @@ describe("upload API", () => {
       }),
     );
     expect(await json(repeated)).toEqual({ previewKey: firstBody.previewKey });
-    expect(mediaMocks.createPreview).toHaveBeenCalledTimes(1);
     expect(mediaMocks.uploadPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a file whose bytes are not audio, whatever its name says", async () => {
+    const account = createAccount({
+      phone: "+32470000044",
+      pseudonym: "Uploader",
+    });
+    const response = await upload(
+      uploadRequest({
+        token: account.authToken,
+        body: new Uint8Array(Array.from("<!doctype html><script>", (c) => c.charCodeAt(0))),
+      }),
+    );
+    expect(response.status).toBe(415);
+    expect(mediaMocks.uploadPreview).not.toHaveBeenCalled();
   });
 
   it("attempts R2 cleanup when an upload fails", async () => {

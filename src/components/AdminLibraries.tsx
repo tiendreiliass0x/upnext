@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ListMusic, Plus, Trash2, Upload, X } from "lucide-react";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import { readJson } from "@/lib/http-client";
-import { prepareUploadFile } from "@/lib/preview-upload";
 
 const adminTokenStorageKey = "upnext-admin-token";
 const accountTokenStorageKey = "upnext-account-token";
@@ -192,7 +191,7 @@ export default function AdminLibraries() {
   }
 
   // Audio goes through the same upload pipeline as a DJ's own files, so the
-  // catalogue gets a real 30-second preview and a real contributor.
+  // catalogue gets a real audio file and a real contributor.
   async function uploadSongs(files: FileList | null) {
     if (!files || files.length === 0 || !selectedId) return;
     if (!accountToken) {
@@ -235,14 +234,11 @@ export default function AdminLibraries() {
   }
 
   async function uploadOne(file: File) {
-    // Fingerprint the original, not the trimmed bytes, so a retry after a
-    // failure still matches the first attempt's idempotency key.
+    // Fingerprint the file so a retry after a failure matches the first
+    // attempt's idempotency key.
     const uploadId = `admin-${selectedId}-${await fileFingerprint(file)}`;
-    // Trim first so the upload carries ~470 KB instead of the whole track. The
-    // server re-encodes regardless, so a browser that cannot do this loses
-    // bandwidth, never correctness.
     const form = new FormData();
-    form.append("file", await prepareUploadFile(file));
+    form.append("file", file);
     const uploaded = await fetch("/api/uploads", {
       method: "POST",
       headers: {
@@ -483,7 +479,7 @@ export default function AdminLibraries() {
                         <strong>{track.title}</strong>
                         <small>
                           {track.artist}
-                          {track.previewUrl ? " · 30 sec" : " · no preview"}
+                          {track.previewUrl ? "" : " · no audio"}
                         </small>
                       </span>
                       <button

@@ -76,6 +76,7 @@ export function getDatabase() {
       library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       artist TEXT NOT NULL,
+      -- Historical name: this now points at the full stored song, not a clip.
       preview_key TEXT REFERENCES audio_uploads(object_key),
       contributed_by TEXT REFERENCES accounts(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL

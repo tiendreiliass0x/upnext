@@ -1,90 +1,43 @@
-import ffmpegStatic from "ffmpeg-static";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { extname, join } from "node:path";
-import { spawn } from "node:child_process";
+/**
+ * Uploads are stored as the DJ's original file, not re-encoded. ffmpeg used
+ * to double as the format check (a file it could not decode was rejected), so
+ * the container is now identified from its leading bytes instead. This is a
+ * cheap sanity check that keeps HTML pages and executables out of the bucket;
+ * it is not a decoder, and a truncated or corrupt file still gets through and
+ * fails at play time.
+ */
+export type AudioFormat = {
+  contentType: string;
+  extension: string;
+};
 
-export async function createThirtySecondPreview(
-  source: Buffer,
-  originalName: string,
-  signal?: AbortSignal,
-) {
-  const workDirectory = await mkdtemp(join(tmpdir(), "dj-booth-"));
-  const extension = extname(originalName).replace(/[^a-z0-9.]/gi, "").slice(0, 8);
-  const inputPath = join(workDirectory, `source${extension || ".audio"}`);
-  const outputPath = join(workDirectory, "preview.mp3");
-  const ffmpegPath = process.env.FFMPEG_PATH || ffmpegStatic || "ffmpeg";
-
-  try {
-    await writeFile(inputPath, source);
-    await new Promise<void>((resolve, reject) => {
-      const child = spawn(ffmpegPath, [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-y",
-        "-i",
-        inputPath,
-        "-t",
-        "30",
-        "-vn",
-        "-ac",
-        "2",
-        "-ar",
-        "44100",
-        "-codec:a",
-        "libmp3lame",
-        "-b:a",
-        "128k",
-        outputPath,
-      ]);
-      let errorOutput = "";
-      let stoppedReason: "aborted" | "timeout" | null = null;
-      let settled = false;
-      let killTimeout: ReturnType<typeof setTimeout> | undefined;
-      const settle = (error?: Error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        if (killTimeout) clearTimeout(killTimeout);
-        signal?.removeEventListener("abort", stopForAbort);
-        if (error) reject(error);
-        else resolve();
-      };
-      const stopForAbort = () => {
-        stoppedReason = "aborted";
-        child.kill("SIGKILL");
-      };
-      const timeout = setTimeout(() => {
-        stoppedReason = "timeout";
-        child.kill("SIGKILL");
-        killTimeout = setTimeout(
-          () => settle(new Error("Audio processing did not stop.")),
-          5000,
-        );
-      }, 60_000);
-
-      signal?.addEventListener("abort", stopForAbort, { once: true });
-      if (signal?.aborted) stopForAbort();
-      child.stderr.on("data", (chunk: Buffer) => {
-        if (errorOutput.length < 4000) errorOutput += chunk.toString();
-      });
-      child.on("error", (error) => settle(error));
-      child.on("close", (code) => {
-        if (stoppedReason === "timeout") {
-          settle(new Error("Audio processing timed out."));
-        } else if (stoppedReason === "aborted") {
-          settle(new Error("Audio upload was cancelled."));
-        } else if (code === 0) {
-          settle();
-        } else {
-          settle(new Error(errorOutput.trim() || "Audio processing failed."));
-        }
-      });
-    });
-
-    return await readFile(outputPath);
-  } finally {
-    await rm(workDirectory, { recursive: true, force: true });
+function startsWith(bytes: Uint8Array, offset: number, ascii: string) {
+  if (bytes.length < offset + ascii.length) return false;
+  for (let index = 0; index < ascii.length; index += 1) {
+    if (bytes[offset + index] !== ascii.charCodeAt(index)) return false;
   }
+  return true;
+}
+
+export function sniffAudioFormat(bytes: Uint8Array): AudioFormat | null {
+  if (bytes.length < 12) return null;
+  if (startsWith(bytes, 0, "ID3")) return { contentType: "audio/mpeg", extension: "mp3" };
+  // MPEG audio frame sync: 11 set bits, then a version that is not reserved.
+  if (bytes[0] === 0xff && (bytes[1] & 0xe6) === 0xe2 && (bytes[1] & 0x18) !== 0x08) {
+    return { contentType: "audio/mpeg", extension: "mp3" };
+  }
+  if (startsWith(bytes, 0, "RIFF") && startsWith(bytes, 8, "WAVE")) {
+    return { contentType: "audio/wav", extension: "wav" };
+  }
+  if (startsWith(bytes, 0, "fLaC")) return { contentType: "audio/flac", extension: "flac" };
+  if (startsWith(bytes, 0, "OggS")) return { contentType: "audio/ogg", extension: "ogg" };
+  if (startsWith(bytes, 4, "ftyp")) return { contentType: "audio/mp4", extension: "m4a" };
+  if (startsWith(bytes, 0, "FORM") && (startsWith(bytes, 8, "AIFF") || startsWith(bytes, 8, "AIFC"))) {
+    return { contentType: "audio/aiff", extension: "aiff" };
+  }
+  // ADTS AAC: sync word 0xFFF with layer bits zero.
+  if (bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0) {
+    return { contentType: "audio/aac", extension: "aac" };
+  }
+  return null;
 }

@@ -44,14 +44,18 @@ function getR2Client() {
   return client;
 }
 
-export async function uploadPreview(objectKey: string, body: Buffer) {
+export async function uploadPreview(
+  objectKey: string,
+  body: Buffer,
+  contentType = "audio/mpeg",
+) {
   const { bucket } = getR2Configuration();
   await getR2Client().send(
     new PutObjectCommand({
       Bucket: bucket,
       Key: objectKey,
       Body: body,
-      ContentType: "audio/mpeg",
+      ContentType: contentType,
       CacheControl: "private, max-age=31536000, immutable",
     }),
   );
@@ -96,11 +100,17 @@ export async function deletePreviews(objectKeys: string[]) {
   return { deleted, failed };
 }
 
+// The browser streams a song with Range requests against this one URL for as
+// long as it plays, so the signature has to outlive the longest song plus a
+// pause, not just the first byte. Two minutes was enough for a 30-second clip
+// and would cut a full track off partway through.
+export const signedReadSeconds = 60 * 60;
+
 export async function getPreviewUrl(objectKey: string) {
   const { bucket } = getR2Configuration();
   return getSignedUrl(
     getR2Client(),
     new GetObjectCommand({ Bucket: bucket, Key: objectKey }),
-    { expiresIn: 2 * 60 },
+    { expiresIn: signedReadSeconds },
   );
 }

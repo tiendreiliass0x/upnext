@@ -1,6 +1,6 @@
 # UP/NEXT
 
-A mobile-first DJ room where guests scan a QR code, listen to 30-second song
+A mobile-first DJ room where guests scan a QR code, listen to the song
 previews, and vote the queue into order.
 
 ## Stack
@@ -8,7 +8,6 @@ previews, and vote the queue into order.
 - Next.js 15 and React 19
 - SQLite through `better-sqlite3`
 - Cloudflare R2 for private preview audio
-- FFmpeg for server-side 30-second MP3 previews
 
 ## Local Setup
 
@@ -40,36 +39,43 @@ refuses to load, so Next.js, Vitest and the cleanup script all execute under
 Node. `bun run <script>` is the right way to invoke them — it resolves the
 binary and spawns it under Node.
 
-## Preview Encoding
+## Audio Storage and Streaming
 
-Uploads are trimmed to a 30-second, 128 kbps stereo MP3 **in the browser**
-before they are sent, so a 9 MB track leaves the DJ's device as roughly 470 KB.
-On venue wifi that is the difference between a set that uploads in seconds and
-one that does not.
+Uploads are stored in R2 exactly as the DJ sent them — no browser trim, no
+server re-encode. The earlier design cut every song to a 30-second 128 kbps
+clip, first in the browser (a full decode to PCM plus an MP3 encode on the main
+thread, which is what froze the booth tab for seconds per song) and then again
+with ffmpeg on the server. Both passes are gone: the audience wanted full songs,
+and the CPU cost bought nothing once the clip was the product's ceiling.
 
-The server re-encodes every upload with its own hard 30-second limit regardless.
-Browser trimming is a bandwidth and memory optimisation, never a trust boundary:
-a client can send whatever it likes, and only the server pass guarantees that
-what reaches R2 is a 30-second clip. That also means the fallback is automatic —
-a browser that cannot decode the codec, or has no Web Audio support, uploads the
-original file and the server does the whole job, exactly as before.
+What replaced ffmpeg's implicit format check is a sniff of the file's leading
+bytes (`src/lib/audio.ts`): MP3, WAV, FLAC, OGG, M4A/AAC and AIFF are accepted
+by their container signature, everything else is refused regardless of its
+name. That keeps non-audio out of the bucket; it does not prove a file decodes,
+so a corrupt song fails at play time rather than at upload.
 
-Trimming is skipped when the file is already at or below preview size, since
-encoding costs a second or two of device CPU and there would be no bandwidth
-left to save. It is also skipped for files over 25 MB: the browser has to
-decode the whole track to PCM before it can cut it, and a long lossless file
-decodes to more memory than a phone tab is allowed. If decoding and encoding
-together take longer than 15 seconds the browser gives up and uploads the
-original. In every one of these cases the server pass does the whole job.
+Playback streams straight from R2. A track's `/preview` route answers with a
+307 to a signed R2 URL, and the browser fetches the song from there with Range
+requests as it plays, so seeking and long tracks cost the app server nothing.
+The signature lasts an hour — it has to outlive the longest song plus a pause,
+because every later Range request reuses the same URL.
 
-128 kbps stereo is deliberate rather than the smaller 96 kbps mono that would do
-for auditioning on a handset: these clips are meant to be playable out loud.
+The upload limit is 60 MB per file (a long lossless track); the route buffers
+the body in memory and serializes uploads per account so a burst cannot exhaust
+a small VPS. Existing 30-second clips uploaded before this change stay 30
+seconds — they were never stored at full length — and have to be uploaded
+again.
+
+Internally the object-key columns are still called `preview_key`. Renaming a
+storage column across every table, the cleanup job and its tests would be a
+migration with real risk and no user-visible gain, so the name stays with a
+comment.
 
 ## Song Libraries
 
 Set `ADMIN_TOKEN` and visit `/admin` to create named libraries and upload songs
-into them. Each upload runs through the same FFmpeg and R2 pipeline as a DJ's
-own files, so catalogue songs carry real 30-second previews.
+into them. Each upload runs through the same sniff-and-store R2 pipeline as a DJ's
+own files, so catalogue songs carry real audio.
 
 In the DJ booth, a picker above the upload zone lets a DJ choose a library,
 search it, and tick songs into the queue. A catalogue song is never re-uploaded:
@@ -113,7 +119,7 @@ bearer header, so the player asks for the signed URL as JSON (`?as=json`) and
 sets that on the element. The redirect form still works for anything that
 follows redirects.
 
-Previews are 30 seconds, so this auditions songs rather than playing sets.
+Songs play in full, so a playlist here is a listenable set, not just an audition.
 
 ## Voting Identity
 
@@ -125,7 +131,7 @@ best-effort device limit until phone verification is added.
 
 ## Tests
 
-- `bun run test` runs the isolated unit, API, component, R2-mock, and FFmpeg suites.
+- `bun run test` runs the isolated unit, API, component, R2-mock, and format-sniff suites.
 - `bun run test:coverage` enforces the repository coverage baseline.
 - `bun run test:r2` runs the opt-in live R2 upload/download/delete check using
   the configured `.env` credentials.
@@ -190,11 +196,10 @@ at. The job is safe to run while the app is serving traffic and safe to re-run.
 
 ## Deploying
 
-The app needs a long-lived process, a writable disk and a real FFmpeg binary,
-so it runs as a container behind Caddy on any small VPS. `Dockerfile`,
+The app needs a long-lived process and a writable disk, so it runs as a container behind Caddy on any small VPS. `Dockerfile`,
 `docker-compose.yml` and `Caddyfile` are in the repo.
 
-Build on the server, not on your laptop. `better-sqlite3` and `ffmpeg-static`
+Build on the server, not on your laptop. `better-sqlite3`
 resolve to platform-specific binaries at install time, and a macOS build cannot
 run in a Linux image. Give the box at least 2 GB of RAM: `next build` is the
 memory-hungry step, not serving.
@@ -248,7 +253,7 @@ replica would split the limiter and corrupt the counts.
 ## Production
 
 Run the app as one long-lived Node process and set `SQLITE_PATH` to a mounted,
-persistent disk. The current SQLite and FFmpeg architecture is not compatible
+persistent disk. The current SQLite-on-disk architecture is not compatible
 with stateless or read-only serverless functions such as Vercel Functions.
 
 R2 objects are private. The app returns short-lived signed URLs for active-room

@@ -437,7 +437,7 @@ describe("library picker", () => {
   it("marks a catalogue entry that has no preview", async () => {
     mockApi();
     render(<LibraryPicker accountToken="t" onAdd={() => {}} />);
-    expect(await screen.findByText(/no preview/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no audio/i)).toBeInTheDocument();
   });
 
   it("sends the search to the server rather than filtering locally", async () => {
@@ -461,10 +461,10 @@ describe("queue interactions", () => {
     const user = userEvent.setup();
     const { unmount } = render(<QueueList tracks={tracks} />);
     const firstButton = screen.getByRole("button", {
-      name: /play 30-second preview of first track/i,
+      name: /^play first track$/i,
     });
     const secondButton = screen.getByRole("button", {
-      name: /play 30-second preview of second track/i,
+      name: /^play second track$/i,
     });
 
     await user.click(firstButton);

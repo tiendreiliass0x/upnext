@@ -85,6 +85,12 @@ describe("R2 adapter", () => {
     });
   });
 
+  it("stores the caller's content type", async () => {
+    await uploadPreview("audio/test.flac", Buffer.from("audio"), "audio/flac");
+    const command = sdkMocks.send.mock.calls[0][0] as { input: Record<string, unknown> };
+    expect(command.input).toMatchObject({ ContentType: "audio/flac" });
+  });
+
   it("deletes objects and signs short-lived reads", async () => {
     await deletePreview("previews/delete.mp3");
     const deleteCommand = sdkMocks.send.mock.calls[0][0] as {
@@ -103,7 +109,7 @@ describe("R2 adapter", () => {
       expect.objectContaining({
         input: { Bucket: "dj-booth", Key: "previews/read.mp3" },
       }),
-      { expiresIn: 120 },
+      { expiresIn: 3600 },
     );
   });
 

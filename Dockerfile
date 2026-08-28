@@ -1,8 +1,8 @@
 # syntax=docker/dockerfile:1
 
-# Build on Linux, never ship the host's binaries. better-sqlite3 and
-# ffmpeg-static both resolve to platform-specific executables at install time,
-# and a macOS build is a Mach-O binary that cannot run in this image.
+# Build on Linux, never ship the host's binaries. better-sqlite3 resolves to a
+# platform-specific binding at install time, and a macOS build is a Mach-O
+# binary that cannot run in this image.
 #
 # Every stage is a Node image with the bun binary copied in, rather than the
 # bun image itself. bun is the package manager (bun.lock is the lockfile) but

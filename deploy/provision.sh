@@ -2,7 +2,7 @@
 # Provision a fresh Debian/Ubuntu VPS to serve UP/NEXT, and start it.
 #
 # Idempotent: safe to re-run after a failure or to redeploy a new commit.
-# Everything the app needs at runtime — Node, SQLite, FFmpeg — lives inside the
+# Everything the app needs at runtime — Node, SQLite — lives inside the
 # image, so the host only gets Docker. That keeps the versions that were
 # actually tested, rather than whatever the distro ships.
 #

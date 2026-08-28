@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createThirtySecondPreview } from "@/lib/audio";
+import { sniffAudioFormat } from "@/lib/audio";
 import { getAccountFromRequest } from "@/lib/auth";
 import { deletePreview, uploadPreview } from "@/lib/r2";
 import {
@@ -10,7 +10,10 @@ import {
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-const maximumUploadSize = 40 * 1024 * 1024;
+// Full songs are stored as uploaded. 60 MB covers a long lossless track; the
+// route buffers the body in memory, so this bound and the one-job-per-account
+// gate below are what keep a burst of uploads from exhausting a small VPS.
+const maximumUploadSize = 60 * 1024 * 1024;
 type UploadRegistry = typeof globalThis & {
   djBoothAudioJobs?: Set<string>;
 };
@@ -48,13 +51,13 @@ export async function POST(request: Request) {
   }
   if (contentLength > maximumUploadSize + 1024 * 1024) {
     return NextResponse.json(
-      { error: "Audio files must be smaller than 40 MB." },
+      { error: "Audio files must be smaller than 60 MB." },
       { status: 413 },
     );
   }
   if (activeAudioJobs.has(account.id) || activeAudioJobs.size >= 2) {
     return NextResponse.json(
-      { error: "Audio processing is busy. Try again in a moment." },
+      { error: "Uploads are busy. Try again in a moment." },
       { status: 429 },
     );
   }
@@ -69,7 +72,7 @@ export async function POST(request: Request) {
     }
     if (file.size === 0 || file.size > maximumUploadSize) {
       return NextResponse.json(
-        { error: "Audio files must be smaller than 40 MB." },
+        { error: "Audio files must be smaller than 60 MB." },
         { status: 413 },
       );
     }
@@ -84,13 +87,15 @@ export async function POST(request: Request) {
     }
 
     const source = Buffer.from(await file.arrayBuffer());
-    const preview = await createThirtySecondPreview(
-      source,
-      file.name,
-      request.signal,
-    );
-    uploadedObjectKey = `previews/${account.id}/${crypto.randomUUID()}.mp3`;
-    await uploadPreview(uploadedObjectKey, preview);
+    const format = sniffAudioFormat(source);
+    if (!format) {
+      return NextResponse.json(
+        { error: "That file is not a supported audio format." },
+        { status: 415 },
+      );
+    }
+    uploadedObjectKey = `audio/${account.id}/${crypto.randomUUID()}.${format.extension}`;
+    await uploadPreview(uploadedObjectKey, source, format.contentType);
     registerAudioUpload({
       objectKey: uploadedObjectKey,
       accountId: account.id,
@@ -101,7 +106,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ previewKey: uploadedObjectKey });
   } catch (error) {
     console.error(
-      "Preview upload failed:",
+      "Audio upload failed:",
       error instanceof Error ? error.message : "Unknown error",
     );
     if (uploadedObjectKey) {
@@ -110,7 +115,7 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error && error.message === "R2 credentials are incomplete."
         ? error.message
-        : "The 30-second preview could not be created.";
+        : "The audio could not be stored.";
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
     activeAudioJobs.delete(account.id);

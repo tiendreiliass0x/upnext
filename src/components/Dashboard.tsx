@@ -27,7 +27,6 @@ import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import { readJson } from "@/lib/http-client";
-import { prepareUploadFile } from "@/lib/preview-upload";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
@@ -813,19 +812,12 @@ export default function Dashboard({
       for (let index = 0; index < tracksToUpload.length; index += 1) {
         const track = tracksToUpload[index];
         if (!track.file) continue;
-        // Trim first so the upload carries ~470 KB instead of the whole track.
-        // The server still re-encodes with its own 30 second limit, so a
-        // browser that cannot do this loses bandwidth, never correctness.
+        // The original file goes up as-is: no decode, no re-encode, so the
+        // booth tab never stalls on a DJ's phone while a song is prepared.
         const step = `${index + 1} of ${tracksToUpload.length}`;
-        setUploadProgress(`Preparing preview ${step}`);
-        const upload = await prepareUploadFile(track.file, (fraction) => {
-          setUploadProgress(
-            `Preparing preview ${step} (${Math.round(fraction * 100)}%)`,
-          );
-        });
-        setUploadProgress(`Uploading preview ${step}`);
+        setUploadProgress(`Uploading ${track.title} (${step})`);
         const formData = new FormData();
-        formData.append("file", upload);
+        formData.append("file", track.file);
         const uploadResponse = await fetchWithTimeout(
           "/api/uploads",
           {
@@ -1435,7 +1427,7 @@ export function LibraryPicker({
                   <strong>{track.title}</strong>
                   <small>
                     {track.artist}
-                    {track.previewUrl ? " · 30 sec" : " · no preview"}
+                    {track.previewUrl ? "" : " · no audio"}
                   </small>
                 </span>
               </label>
@@ -1557,7 +1549,7 @@ function DJSetup({
               <div className="section-heading track-heading">
                 <div>
                   <h2 id="music-title">Add the music</h2>
-                  <p>Audio files include a private 30-second preview.</p>
+                  <p>Full songs, stored privately and streamed to guests.</p>
                 </div>
                 {tracks.length > 0 && (
                   <button
@@ -2025,7 +2017,7 @@ export function QueueList({
                 type="button"
                 className="queue-art preview-play"
                 onClick={() => void togglePreview(track)}
-                aria-label={`${playingTrackId === track.id ? "Stop" : "Play"} 30-second preview of ${track.title}`}
+                aria-label={`${playingTrackId === track.id ? "Stop" : "Play"} ${track.title}`}
                 aria-pressed={playingTrackId === track.id}
               >
                 {loadingTrackId === track.id ? (
@@ -2045,7 +2037,7 @@ export function QueueList({
               <strong>{track.title}</strong>
               <small>
                 {track.artist}
-                {track.previewUrl ? " · 30 sec" : ""}
+                
               </small>
             </span>
             {interactive ? (
