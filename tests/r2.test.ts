@@ -109,7 +109,7 @@ describe("R2 adapter", () => {
       expect.objectContaining({
         input: { Bucket: "dj-booth", Key: "previews/read.mp3" },
       }),
-      { expiresIn: 3600 },
+      { expiresIn: 900 },
     );
   });
 

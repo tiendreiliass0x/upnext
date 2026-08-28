@@ -60,11 +60,29 @@ requests as it plays, so seeking and long tracks cost the app server nothing.
 The signature lasts an hour — it has to outlive the longest song plus a pause,
 because every later Range request reuses the same URL.
 
-The upload limit is 60 MB per file (a long lossless track); the route buffers
-the body in memory and serializes uploads per account so a burst cannot exhaust
-a small VPS. Existing 30-second clips uploaded before this change stay 30
-seconds — they were never stored at full length — and have to be uploaded
-again.
+The upload limit is 60 MB per file (a long lossless track), and Caddy's
+`request_body.max_size` sits just above it so the proxy never answers a 413
+before the app can explain one. The body streams to R2 with its length
+declared rather than being buffered a second time, the request's abort signal
+cancels the PUT when the DJ navigates away, and uploads are serialized per
+account so a burst cannot exhaust a small VPS.
+
+Storage is the cost that scales, and a library track pins its upload for good,
+so each account has a ceiling: **1 GB by default** (`UPLOAD_QUOTA_MB`), about
+eighty MP3s or twenty long WAVs, enforced from the `size_bytes` column on
+`audio_uploads` before the PUT. Uploads are also rate limited to 60 per account
+per hour. Both exist because accounts are self-registered and unverified.
+
+Signed read URLs last **15 minutes**: long enough for any song plus a pause,
+because every Range request during playback reuses the same URL, and no longer,
+because for that window the link is a credential-free download anyone can be
+sent. Guest playback of full songs is the product; the TTL is the only dial
+there. If DJs upload licensed masters, that exposure is theirs to weigh.
+
+Clips from before this change (object keys under `previews/`) are 30 seconds
+and were never stored at full length. On start-up the catalogue drops its
+claim on them so they show as "no audio" instead of stopping short; the clips
+themselves are reaped by cleanup once nothing holds them. Re-upload the songs.
 
 Internally the object-key columns are still called `preview_key`. Renaming a
 storage column across every table, the cleanup job and its tests would be a

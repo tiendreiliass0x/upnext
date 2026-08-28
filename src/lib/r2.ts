@@ -1,3 +1,4 @@
+import type { Readable } from "node:stream";
 import {
   DeleteObjectCommand,
   DeleteObjectsCommand,
@@ -46,8 +47,9 @@ function getR2Client() {
 
 export async function uploadPreview(
   objectKey: string,
-  body: Buffer,
+  body: Buffer | Readable,
   contentType = "audio/mpeg",
+  options: { contentLength?: number; signal?: AbortSignal } = {},
 ) {
   const { bucket } = getR2Configuration();
   await getR2Client().send(
@@ -56,8 +58,10 @@ export async function uploadPreview(
       Key: objectKey,
       Body: body,
       ContentType: contentType,
+      ContentLength: options.contentLength,
       CacheControl: "private, max-age=31536000, immutable",
     }),
+    { abortSignal: options.signal },
   );
 }
 
@@ -102,9 +106,10 @@ export async function deletePreviews(objectKeys: string[]) {
 
 // The browser streams a song with Range requests against this one URL for as
 // long as it plays, so the signature has to outlive the longest song plus a
-// pause, not just the first byte. Two minutes was enough for a 30-second clip
-// and would cut a full track off partway through.
-export const signedReadSeconds = 60 * 60;
+// pause, not just the first byte — two minutes would cut a full track off
+// partway through. It is also the window in which a guest can pass the link
+// on, so it is as short as playback allows rather than as long as convenient.
+export const signedReadSeconds = 15 * 60;
 
 export async function getPreviewUrl(objectKey: string) {
   const { bucket } = getR2Configuration();

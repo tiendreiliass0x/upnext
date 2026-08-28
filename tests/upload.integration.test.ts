@@ -12,7 +12,8 @@ vi.mock("@/lib/r2", () => ({
   getPreviewUrl: mediaMocks.getPreviewUrl,
 }));
 
-import { POST as upload } from "@/app/api/uploads/route";
+import { accountStorageQuota, POST as upload } from "@/app/api/uploads/route";
+import { resetRateLimits } from "@/lib/rate-limit";
 import { GET as getPreview } from "@/app/api/tracks/[id]/preview/route";
 import { createAccount } from "@/lib/accounts";
 import {
@@ -62,6 +63,7 @@ async function json<T>(response: Response) {
 
 describe("upload API", () => {
   beforeEach(() => {
+    resetRateLimits();
     mediaMocks.uploadPreview.mockResolvedValue(undefined);
     mediaMocks.deletePreview.mockResolvedValue(undefined);
     mediaMocks.getPreviewUrl.mockResolvedValue(
@@ -107,11 +109,14 @@ describe("upload API", () => {
     expect(firstBody.previewKey).toMatch(
       new RegExp(`^audio/${account.id}/.+\\.mp3$`),
     );
-    expect(mediaMocks.uploadPreview).toHaveBeenCalledWith(
-      firstBody.previewKey,
-      Buffer.from(mp3Bytes),
-      "audio/mpeg",
-    );
+    // The body streams to R2 with its length declared, rather than being
+    // buffered a second time; the request's own signal rides along.
+    const [key, body, contentType, options] = mediaMocks.uploadPreview.mock.calls[0];
+    expect(key).toBe(firstBody.previewKey);
+    expect(typeof (body as { pipe?: unknown }).pipe).toBe("function");
+    expect(contentType).toBe("audio/mpeg");
+    expect(options).toMatchObject({ contentLength: mp3Bytes.length });
+    expect((options as { signal?: unknown }).signal).toBeInstanceOf(AbortSignal);
     expect(getAudioUploadByRequest(account.id, "stable-upload")).toBe(
       firstBody.previewKey,
     );
@@ -204,5 +209,36 @@ describe("preview API", () => {
       params: Promise.resolve({ id: trackId }),
     });
     expect(endedResponse.status).toBe(404);
+  });
+
+  it("refuses an upload that would push the account past its storage quota", async () => {
+    const account = createAccount({
+      phone: "+32470000045",
+      pseudonym: "Hoarder",
+    });
+    registerAudioUpload({
+      objectKey: `audio/${account.id}/big.wav`,
+      accountId: account.id,
+      originalName: "big.wav",
+      sizeBytes: accountStorageQuota - 4,
+    });
+    const response = await upload(uploadRequest({ token: account.authToken }));
+    expect(response.status).toBe(507);
+    expect((await json<{ error: string }>(response)).error).toMatch(/storage is full/i);
+    expect(mediaMocks.uploadPreview).not.toHaveBeenCalled();
+  });
+
+  it("rate limits uploads per account", async () => {
+    const account = createAccount({
+      phone: "+32470000046",
+      pseudonym: "Scripter",
+    });
+    let last: Response | null = null;
+    for (let index = 0; index < 61; index += 1) {
+      last = await upload(uploadRequest({ token: account.authToken }));
+    }
+    expect(last?.status).toBe(429);
+    expect(last?.headers.get("Retry-After")).toBeTruthy();
+    expect(mediaMocks.uploadPreview).toHaveBeenCalledTimes(60);
   });
 });

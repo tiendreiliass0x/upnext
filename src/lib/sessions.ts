@@ -563,12 +563,13 @@ export function registerAudioUpload(input: {
   accountId: string;
   originalName: string;
   requestId?: string | null;
+  sizeBytes?: number;
 }) {
   getDatabase()
     .prepare(
       `INSERT INTO audio_uploads
-        (object_key, account_id, original_name, request_id, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
+        (object_key, account_id, original_name, request_id, created_at, size_bytes)
+       VALUES (?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.objectKey,
@@ -576,7 +577,18 @@ export function registerAudioUpload(input: {
       input.originalName,
       input.requestId ?? null,
       new Date().toISOString(),
+      Math.max(0, Math.floor(input.sizeBytes ?? 0)),
     );
+}
+
+/** Bytes this account currently holds in R2, counting every registered upload. */
+export function getAccountStorageBytes(accountId: string) {
+  const row = getDatabase()
+    .prepare(
+      "SELECT COALESCE(SUM(size_bytes), 0) AS bytes FROM audio_uploads WHERE account_id = ?",
+    )
+    .get(accountId) as { bytes: number };
+  return row.bytes;
 }
 
 export function getAudioUploadByRequest(accountId: string, requestId: string) {

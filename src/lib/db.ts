@@ -63,7 +63,9 @@ export function getDatabase() {
       account_id TEXT NOT NULL REFERENCES accounts(id),
       original_name TEXT NOT NULL,
       request_id TEXT,
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      -- Summed per account to enforce the storage quota.
+      size_bytes INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS libraries (
@@ -250,6 +252,18 @@ export function getDatabase() {
   if (!uploadColumns.some((column) => column.name === "request_id")) {
     database.exec("ALTER TABLE audio_uploads ADD COLUMN request_id TEXT");
   }
+  if (!uploadColumns.some((column) => column.name === "size_bytes")) {
+    database.exec(
+      "ALTER TABLE audio_uploads ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0",
+    );
+  }
+  // Objects under previews/ are 30-second clips from before full songs were
+  // stored. In the catalogue they now look like whole songs and stop short,
+  // so the claim is dropped: the row shows "no audio" until it is re-uploaded,
+  // and cleanup reaps the clip once nothing else holds it.
+  database.exec(
+    "UPDATE library_tracks SET preview_key = NULL WHERE preview_key LIKE 'previews/%'",
+  );
   database.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS sessions_host_request_idx
       ON sessions(host_account_id, request_id)

@@ -1,8 +1,11 @@
+import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
 import { sniffAudioFormat } from "@/lib/audio";
 import { getAccountFromRequest } from "@/lib/auth";
 import { deletePreview, uploadPreview } from "@/lib/r2";
+import { rateLimitedResponse, takeRateLimit } from "@/lib/rate-limit";
 import {
+  getAccountStorageBytes,
   getAudioUploadByRequest,
   registerAudioUpload,
 } from "@/lib/sessions";
@@ -14,6 +17,15 @@ export const runtime = "nodejs";
 // route buffers the body in memory, so this bound and the one-job-per-account
 // gate below are what keep a burst of uploads from exhausting a small VPS.
 const maximumUploadSize = 60 * 1024 * 1024;
+
+// Storage is the cost that scales: a library track pins its upload for good,
+// and accounts are self-registered, so without a per-account ceiling one
+// person could fill the bucket. 1 GB is roughly eighty MP3s or twenty long
+// WAVs — a working catalogue for one DJ, not a hosting service.
+export const accountStorageQuota =
+  Math.max(1, Number(process.env.UPLOAD_QUOTA_MB) || 1024) * 1024 * 1024;
+// Uploads per account per hour: generous for a set, far too few for a script.
+const uploadRateLimit = { limit: 60, windowMs: 60 * 60 * 1000 };
 type UploadRegistry = typeof globalThis & {
   djBoothAudioJobs?: Set<string>;
 };
@@ -55,6 +67,8 @@ export async function POST(request: Request) {
       { status: 413 },
     );
   }
+  const retryAfter = takeRateLimit("uploads", account.id, uploadRateLimit);
+  if (retryAfter !== null) return rateLimitedResponse(retryAfter);
   if (activeAudioJobs.has(account.id) || activeAudioJobs.size >= 2) {
     return NextResponse.json(
       { error: "Uploads are busy. Try again in a moment." },
@@ -86,21 +100,41 @@ export async function POST(request: Request) {
       );
     }
 
-    const source = Buffer.from(await file.arrayBuffer());
-    const format = sniffAudioFormat(source);
+    // Sixteen bytes decide the format; the body itself streams to R2 rather
+    // than being copied into a second 60 MB buffer next to the one the
+    // request parser already holds.
+    const format = sniffAudioFormat(
+      new Uint8Array(await file.slice(0, 16).arrayBuffer()),
+    );
     if (!format) {
       return NextResponse.json(
         { error: "That file is not a supported audio format." },
         { status: 415 },
       );
     }
+    const usedBytes = getAccountStorageBytes(account.id);
+    if (usedBytes + file.size > accountStorageQuota) {
+      const quotaMb = Math.round(accountStorageQuota / (1024 * 1024));
+      return NextResponse.json(
+        {
+          error: `Your storage is full (${quotaMb} MB). Remove songs from your libraries or end old rooms to free space.`,
+        },
+        { status: 507 },
+      );
+    }
     uploadedObjectKey = `audio/${account.id}/${crypto.randomUUID()}.${format.extension}`;
-    await uploadPreview(uploadedObjectKey, source, format.contentType);
+    await uploadPreview(
+      uploadedObjectKey,
+      Readable.fromWeb(file.stream() as import("node:stream/web").ReadableStream),
+      format.contentType,
+      { contentLength: file.size, signal: request.signal },
+    );
     registerAudioUpload({
       objectKey: uploadedObjectKey,
       accountId: account.id,
       originalName: file.name.slice(0, 255),
       requestId: requestId || null,
+      sizeBytes: file.size,
     });
 
     return NextResponse.json({ previewKey: uploadedObjectKey });

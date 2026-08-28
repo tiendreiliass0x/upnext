@@ -20,7 +20,14 @@ export async function GET(
 
   try {
     const previewUrl = await getPreviewUrl(objectKey);
-    return NextResponse.redirect(previewUrl, 307);
+    // Deliberately unauthenticated: guests are anonymous, and the room being
+    // live and unexpired is the gate (getTrackPreviewKey). The signed URL is
+    // per-request and short-lived; never let a cache hand it to the next
+    // caller.
+    return NextResponse.redirect(previewUrl, {
+      status: 307,
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch {
     return NextResponse.json(
       { error: "The preview could not be loaded." },

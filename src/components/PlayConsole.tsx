@@ -560,7 +560,7 @@ export default function PlayConsole() {
               />
             </span>
             <span className="player-time">
-              {formatTime(position)} / {formatTime(duration || 30)}
+              {formatTime(position)}{duration > 0 ? ` / ${formatTime(duration)}` : ""}
             </span>
 
             <button

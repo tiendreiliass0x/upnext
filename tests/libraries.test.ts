@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAccount } from "@/lib/accounts";
-import { getDatabase } from "@/lib/db";
+import { closeDatabase, getDatabase } from "@/lib/db";
 import {
   addLibraryTrack,
   createLibrary,
@@ -231,5 +231,40 @@ describe("contributing to a library", () => {
         contributedBy: null,
       }),
     ).toMatchObject({ title: "Curated" });
+  });
+});
+
+describe("legacy clips", () => {
+  it("drops the catalogue's claim on 30-second clips when the database opens", () => {
+    const curator = createAccount({ phone: "+32470000070", pseudonym: "Curator" });
+    registerAudioUpload({ objectKey: "previews/curator/clip.mp3", accountId: curator.id, originalName: "clip.mp3" });
+    registerAudioUpload({ objectKey: "audio/curator/full.mp3", accountId: curator.id, originalName: "full.mp3" });
+    const database = getDatabase();
+    database
+      .prepare(
+        `INSERT INTO libraries (id, name, description, created_at, updated_at)
+         VALUES ('lib-legacy', 'Legacy', '', '2026-01-01', '2026-01-01')`,
+      )
+      .run();
+    database
+      .prepare(
+        `INSERT INTO library_tracks (id, library_id, title, artist, preview_key, contributed_by, created_at)
+         VALUES ('clip', 'lib-legacy', 'Clip', 'A', 'previews/curator/clip.mp3', NULL, '2026-01-01'),
+                ('full', 'lib-legacy', 'Full', 'B', 'audio/curator/full.mp3', NULL, '2026-01-01')`,
+      )
+      .run();
+
+    // The migration runs on open, so simulate the next process start.
+    const path = process.env.SQLITE_PATH;
+    closeDatabase();
+    process.env.SQLITE_PATH = path;
+
+    const rows = getDatabase()
+      .prepare("SELECT id, preview_key FROM library_tracks ORDER BY id")
+      .all() as Array<{ id: string; preview_key: string | null }>;
+    expect(rows).toEqual([
+      { id: "clip", preview_key: null },
+      { id: "full", preview_key: "audio/curator/full.mp3" },
+    ]);
   });
 });
