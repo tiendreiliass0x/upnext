@@ -189,6 +189,18 @@ function getGuestLink(sessionId: string, baseUrl?: string | null) {
   return url.toString();
 }
 
+async function readJson<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    // An HTML error page from a proxy, or a route that is not ready yet.
+    throw new Error(
+      `The server sent an unexpected response (${response.status}).`,
+    );
+  }
+}
+
 async function fetchWithTimeout(
   input: RequestInfo | URL,
   init?: RequestInit,
@@ -1218,10 +1230,9 @@ export function LibraryPicker({
           cache: "no-store",
           headers: { Authorization: `Bearer ${accountToken}` },
         });
-        const data = (await response.json()) as {
-          libraries?: Library[];
-          error?: string;
-        };
+        const data = await readJson<{ libraries?: Library[]; error?: string }>(
+          response,
+        );
         if (!response.ok || !data.libraries) throw new Error(data.error || "");
         if (cancelled) return;
         setLibraries(data.libraries);
@@ -1253,10 +1264,10 @@ export function LibraryPicker({
               headers: { Authorization: `Bearer ${accountToken}` },
             },
           );
-          const data = (await response.json()) as {
+          const data = await readJson<{
             tracks?: LibraryTrack[];
             error?: string;
-          };
+          }>(response);
           if (!response.ok || !data.tracks) {
             throw new Error(data.error || "The library could not be read.");
           }

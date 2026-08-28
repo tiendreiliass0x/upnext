@@ -55,9 +55,11 @@ button {
 }
 
 button:focus-visible,
-input:focus-visible {
-  outline: 3px solid color-mix(in srgb, var(--accent) 80%, var(--ink));
-  outline-offset: 3px;
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 85%, var(--ink));
+  outline-offset: 1px;
 }
 
 button:active:not(:disabled) {
@@ -1576,6 +1578,18 @@ button:active:not(:disabled) {
   background: color-mix(in srgb, var(--ink) 5%, transparent);
 }
 
+.library-list input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.library-picker .secondary-button {
+  align-self: flex-start;
+}
+
 .library-empty {
   margin: 0;
   padding: 10px 2px;
@@ -1586,19 +1600,48 @@ button:active:not(:disabled) {
 .admin-page {
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 18px;
+}
+
+/* Self-contained on purpose. The DJ booth's .form-section is a 36px/1fr grid
+   whose first column holds a step number; reusing it here dropped every field
+   into the 36px column. */
+.admin-panel {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.admin-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.admin-panel h2 {
+  margin: 0;
+  font-size: 19px;
+  letter-spacing: -0.01em;
 }
 
 .admin-inline-form {
-  display: flex;
-  align-items: flex-end;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
+  align-items: end;
   gap: 12px;
-  flex-wrap: wrap;
-  margin-bottom: 16px;
 }
 
-.admin-inline-form .field {
-  flex: 1 1 180px;
+.admin-inline-form .primary-button {
+  min-height: 50px;
+  white-space: nowrap;
+}
+
+@media (max-width: 640px) {
+  .admin-inline-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .admin-library-list,
@@ -1616,10 +1659,35 @@ button:active:not(:disabled) {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 11px;
+  width: 100%;
+  min-width: 0;
+  padding: 11px 13px;
   border: 1px solid var(--line);
   border-radius: 11px;
   background: var(--surface);
+}
+
+.admin-library-list .track-copy,
+.admin-track-list .track-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.admin-library-list .track-copy strong,
+.admin-track-list .track-copy strong {
+  font-size: 14px;
+}
+
+.admin-library-list .track-copy small,
+.admin-track-list .track-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-library-list li.is-active {
@@ -1629,6 +1697,7 @@ button:active:not(:disabled) {
 
 .admin-library-list li > button:first-child {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 11px;
@@ -1672,6 +1741,18 @@ button:active:not(:disabled) {
   cursor: pointer;
   margin-bottom: 12px;
   position: relative;
+  /* The panel body is a flex column, so without this the label stretches into
+     a full-width empty slab that reads as a drop zone it is not. */
+  align-self: flex-start;
+}
+
+.admin-track-count {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 /* Visually hidden rather than display:none so the input stays in the tab

@@ -15,6 +15,17 @@ function readStorage(key: string) {
   }
 }
 
+async function readJson<T>(response: Response): Promise<T> {
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(
+      `The server sent an unexpected response (${response.status}).`,
+    );
+  }
+}
+
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
@@ -71,10 +82,10 @@ export default function AdminLibraries() {
         cache: "no-store",
         headers: authHeaders(),
       });
-      const data = (await response.json()) as {
+      const data = await readJson<{
         libraries?: Library[];
         error?: string;
-      };
+      }>(response);
       if (response.status === 401 || response.status === 403) {
         throw new Error("That admin token was not accepted.");
       }
@@ -103,10 +114,10 @@ export default function AdminLibraries() {
         `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
         { cache: "no-store", headers: authHeaders() },
       );
-      const data = (await response.json()) as {
+      const data = await readJson<{
         tracks?: LibraryTrack[];
         error?: string;
-      };
+      }>(response);
       if (!response.ok || !data.tracks) {
         throw new Error(data.error || "Songs could not be loaded.");
       }
@@ -141,10 +152,10 @@ export default function AdminLibraries() {
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name, description }),
       });
-      const data = (await response.json()) as {
+      const data = await readJson<{
         library?: Library;
         error?: string;
-      };
+      }>(response);
       if (!response.ok || !data.library) {
         throw new Error(data.error || "The library could not be created.");
       }
@@ -175,7 +186,7 @@ export default function AdminLibraries() {
         { method: "DELETE", headers: authHeaders() },
       );
       if (!response.ok) {
-        const data = (await response.json()) as { error?: string };
+        const data = await readJson<{ error?: string }>(response);
         throw new Error(data.error || "The library could not be deleted.");
       }
       if (selectedId === library.id) setSelectedId("");
@@ -287,7 +298,7 @@ export default function AdminLibraries() {
         { method: "DELETE", headers: authHeaders() },
       );
       if (!response.ok) {
-        const data = (await response.json()) as { error?: string };
+        const data = await readJson<{ error?: string }>(response);
         throw new Error(data.error || "The song could not be removed.");
       }
       await Promise.all([loadTracks(), loadLibraries()]);
@@ -370,8 +381,8 @@ export default function AdminLibraries() {
       )}
 
       <main className="page-shell admin-page">
-        <section className="form-section">
-          <div className="section-content">
+        <section className="admin-panel">
+          <div className="admin-panel-body">
             <h2>Libraries</h2>
             <form className="admin-inline-form" onSubmit={addLibrary}>
               <label className="field">
@@ -435,8 +446,8 @@ export default function AdminLibraries() {
         </section>
 
         {selected && (
-          <section className="form-section">
-            <div className="section-content">
+          <section className="admin-panel">
+            <div className="admin-panel-body">
               <h2>{selected.name}</h2>
               {!accountToken && (
                 <p className="link-warning" role="status">
@@ -463,6 +474,10 @@ export default function AdminLibraries() {
               {tracks.length === 0 ? (
                 <p className="library-empty">No songs in this library yet.</p>
               ) : (
+                <>
+                <p className="admin-track-count">
+                  {tracks.length} song{tracks.length === 1 ? "" : "s"}
+                </p>
                 <ul className="admin-track-list">
                   {tracks.map((track) => (
                     <li key={track.id}>
@@ -485,6 +500,7 @@ export default function AdminLibraries() {
                     </li>
                   ))}
                 </ul>
+                </>
               )}
             </div>
           </section>
