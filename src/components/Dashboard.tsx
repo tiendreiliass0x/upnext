@@ -26,6 +26,7 @@ import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import { readJson } from "@/lib/http-client";
+import { prepareUploadFile } from "@/lib/preview-upload";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
@@ -744,19 +745,14 @@ export default function Dashboard({
         // browser that cannot do this loses bandwidth, never correctness.
         const step = `${index + 1} of ${tracksToUpload.length}`;
         setUploadProgress(`Preparing preview ${step}`);
-        // The encoder is loaded on demand so DJs who never upload a file
-        // (library-only sets) do not pay for it in the first load.
-        const { trimToPreview } = await import("@/lib/preview-client");
-        const trimmed = await trimToPreview(track.file, (fraction) => {
+        const upload = await prepareUploadFile(track.file, (fraction) => {
           setUploadProgress(
             `Preparing preview ${step} (${Math.round(fraction * 100)}%)`,
           );
         });
-        setUploadProgress(
-          `Uploading preview ${index + 1} of ${tracksToUpload.length}`,
-        );
+        setUploadProgress(`Uploading preview ${step}`);
         const formData = new FormData();
-        formData.append("file", trimmed ?? track.file);
+        formData.append("file", upload);
         const uploadResponse = await fetchWithTimeout(
           "/api/uploads",
           {
@@ -769,10 +765,10 @@ export default function Dashboard({
           },
           5 * 60_000,
         );
-        const uploadData = (await uploadResponse.json()) as {
+        const uploadData = await readJson<{
           previewKey?: string;
           error?: string;
-        };
+        }>(uploadResponse);
         if (!uploadResponse.ok || !uploadData.previewKey) {
           throw new Error(
             uploadData.error || `A preview for ${track.title} could not be created.`,

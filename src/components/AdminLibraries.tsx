@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ListMusic, Plus, Trash2, Upload, X } from "lucide-react";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import { readJson } from "@/lib/http-client";
+import { prepareUploadFile } from "@/lib/preview-upload";
 
 const adminTokenStorageKey = "upnext-admin-token";
 const accountTokenStorageKey = "upnext-account-token";
@@ -240,10 +241,8 @@ export default function AdminLibraries() {
     // Trim first so the upload carries ~470 KB instead of the whole track. The
     // server re-encodes regardless, so a browser that cannot do this loses
     // bandwidth, never correctness.
-    const { trimToPreview } = await import("@/lib/preview-client");
-    const trimmed = await trimToPreview(file);
     const form = new FormData();
-    form.append("file", trimmed ?? file);
+    form.append("file", await prepareUploadFile(file));
     const uploaded = await fetch("/api/uploads", {
       method: "POST",
       headers: {
@@ -257,10 +256,10 @@ export default function AdminLibraries() {
       },
       body: form,
     });
-    const uploadData = (await uploaded.json()) as {
+    const uploadData = await readJson<{
       previewKey?: string;
       error?: string;
-    };
+    }>(uploaded);
     if (!uploaded.ok || !uploadData.previewKey) {
       throw new Error(uploadData.error || "could not be processed.");
     }

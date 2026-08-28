@@ -15,7 +15,10 @@ export const previewChannels = 2;
 export const maximumTrimBytes = 25 * 1024 * 1024;
 // Decode plus encode of a long track on a slow phone can run for a long time
 // with nothing to show for it. Past this, upload the original and let the
-// server do the work.
+// server do the work. The budget bounds the wait, not the work: there is no
+// way to cancel an in-flight decodeAudioData, and closing the context does not
+// stop it in Chrome, so a timed-out decode keeps running while the original
+// uploads. The size cap above is what keeps that from being dangerous.
 export const trimBudgetMs = 15_000;
 
 const samplesPerFrame = 1152;
@@ -47,10 +50,14 @@ function toInt16(samples: Float32Array) {
 class TrimBudgetExceeded extends Error {}
 
 function withDeadline<T>(promise: Promise<T>, deadline: number): Promise<T> {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0) return Promise.reject(new TrimBudgetExceeded());
+  // Always attach handlers to the inner promise, even when the deadline has
+  // already passed: a 0 ms timer still enforces the budget, and an orphaned
+  // promise that later rejects would surface as a global unhandled rejection.
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new TrimBudgetExceeded()), remaining);
+    const timer = setTimeout(
+      () => reject(new TrimBudgetExceeded()),
+      Math.max(0, deadline - Date.now()),
+    );
     promise.then(resolve, reject).finally(() => clearTimeout(timer));
   });
 }

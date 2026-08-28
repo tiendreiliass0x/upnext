@@ -70,6 +70,7 @@ function sourceFile(bytes: number, name = "Artist - Song.flac") {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("browser preview trimming", () => {
@@ -126,6 +127,28 @@ describe("browser preview trimming", () => {
       vi.useRealTimers();
     }
   });
+
+  it("stops encoding once the clock runs past the budget", async () => {
+    const { closed } = installAudio();
+    // Decode and render come back instantly; the wall clock then jumps past
+    // the budget partway through the encode loop.
+    const start = Date.now();
+    let calls = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => {
+      calls += 1;
+      return calls > 3 ? start + trimBudgetMs + 1 : start;
+    });
+    const seen: number[] = [];
+
+    const result = await trimToPreview(sourceFile(9_000_000), (fraction) =>
+      seen.push(fraction),
+    );
+
+    expect(result).toBeNull();
+    // It gave up early: never reached the end-of-encode progress report.
+    expect(seen).not.toContain(1);
+    expect(closed.count).toBe(1);
+  }, 30_000);
 
   it("does not spend CPU on a file already at preview size", async () => {
     const { closed } = installAudio();
