@@ -35,6 +35,12 @@ export async function POST(
         { status: 404 },
       );
     }
+    if (result === "full") {
+      return NextResponse.json(
+        { error: "This playlist is full." },
+        { status: 409 },
+      );
+    }
     // Adding twice is the same outcome as adding once, so it is not an error.
     return NextResponse.json(
       { added: result === "added" },

@@ -630,3 +630,42 @@ describe("starting a room from a playlist", () => {
     expect(screen.getByDisplayValue("Friday After Dark")).toBeInTheDocument();
   });
 });
+
+describe("the playlist seed parameter", () => {
+  it("is dropped from the address once consumed, so a reload keeps the DJ's edits", async () => {
+    window.history.replaceState({}, "", "/?playlist=pl-1");
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/accounts") {
+          return Response.json({
+            account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" },
+          });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({ activeRoom: null, guestBaseUrl: null });
+        }
+        if (url === "/api/playlists/pl-1") {
+          return Response.json({
+            playlist: { id: "pl-1", name: "Warm Up Set" },
+            tracks: [
+              {
+                id: "lt-1", libraryId: "lib", title: "Essence", artist: "Wizkid",
+                previewUrl: "/api/library-tracks/lt-1/preview",
+                libraryPreviewKey: "previews/essence.mp3",
+                contributedBy: null, createdAt: "",
+              },
+            ],
+          });
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      }),
+    );
+    render(<Dashboard initialPlaylistId="pl-1" />);
+
+    await screen.findByDisplayValue("Warm Up Set", {}, { timeout: 3000 });
+    expect(window.location.search).toBe("");
+  });
+});

@@ -13,6 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { readJson } from "@/lib/http-client";
 import type { CatalogueTrack } from "@/lib/libraries";
 import type { Playlist, PlaylistTrack } from "@/lib/playlists";
 
@@ -23,15 +24,6 @@ type View = { kind: "search" } | { kind: "playlist"; id: string };
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
-}
-
-async function readJson<T>(response: Response): Promise<T> {
-  const text = await response.text();
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(`The server sent an unexpected response (${response.status}).`);
-  }
 }
 
 function formatTime(seconds: number) {
@@ -52,6 +44,9 @@ export default function PlayConsole() {
 
   // Player
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Bumped on every playAt so a slow signed-URL fetch for an earlier click
+  // cannot swap the element to the wrong song after a later click won.
+  const playGenerationRef = useRef(0);
   const [queue, setQueue] = useState<Row[]>([]);
   const [current, setCurrent] = useState<Row | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -97,6 +92,9 @@ export default function PlayConsole() {
   useEffect(() => {
     if (!token) return;
     let cancelled = false;
+    // Clear the old list right away: the remove button binds to the new view,
+    // so leaving the previous rows up would let a click act on the wrong one.
+    setRows([]);
     const timer = window.setTimeout(
       () => {
         void (async () => {
@@ -151,6 +149,7 @@ export default function PlayConsole() {
       const track = list[index];
       if (!track || !track.previewUrl) return;
 
+      const generation = ++playGenerationRef.current;
       setQueue(list);
       setCurrent(track);
       setIsLoadingTrack(true);
@@ -163,6 +162,8 @@ export default function PlayConsole() {
           headers: authHeaders(),
         });
         const data = await readJson<{ url?: string; error?: string }>(response);
+        // A later click has taken over; this result is stale.
+        if (playGenerationRef.current !== generation) return;
         if (!response.ok || !data.url) {
           throw new Error(data.error || "This preview could not be loaded.");
         }
@@ -170,12 +171,11 @@ export default function PlayConsole() {
         if (!audio) return;
         audio.src = data.url;
         await audio.play();
-        setIsPlaying(true);
       } catch (playError) {
+        if (playGenerationRef.current !== generation) return;
         setError(errorMessage(playError));
-        setIsPlaying(false);
       } finally {
-        setIsLoadingTrack(false);
+        if (playGenerationRef.current === generation) setIsLoadingTrack(false);
       }
     },
     [authHeaders],
@@ -186,12 +186,12 @@ export default function PlayConsole() {
     if (current?.id === track.id) {
       const audio = audioRef.current;
       if (!audio) return;
+      // isPlaying follows the element's own play/pause events, so nothing is
+      // set here: a refused play() leaves the button honest.
       if (audio.paused) {
-        void audio.play();
-        setIsPlaying(true);
+        audio.play().catch(() => undefined);
       } else {
         audio.pause();
-        setIsPlaying(false);
       }
       return;
     }
@@ -273,6 +273,7 @@ export default function PlayConsole() {
   }
 
   async function removePlaylist(playlist: Playlist) {
+    if (!window.confirm(`Delete the playlist "${playlist.name}"?`)) return;
     setIsBusy(true);
     try {
       const response = await fetch(
@@ -499,13 +500,12 @@ export default function PlayConsole() {
       <audio
         ref={audioRef}
         preload="none"
+        onPlay={() => setIsPlaying(true)}
+        onPause={() => setIsPlaying(false)}
         onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
         onDurationChange={(event) => setDuration(event.currentTarget.duration)}
         onEnded={() => step(1)}
-        onError={() => {
-          setIsPlaying(false);
-          setError("That preview could not be played.");
-        }}
+        onError={() => setError("That preview could not be played.")}
       />
 
       {current && (
@@ -527,11 +527,9 @@ export default function PlayConsole() {
                 const audio = audioRef.current;
                 if (!audio) return;
                 if (audio.paused) {
-                  void audio.play();
-                  setIsPlaying(true);
+                  audio.play().catch(() => undefined);
                 } else {
                   audio.pause();
-                  setIsPlaying(false);
                 }
               }}
             >

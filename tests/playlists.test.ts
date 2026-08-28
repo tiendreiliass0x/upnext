@@ -9,6 +9,9 @@ import {
   getPlaylist,
   listPlaylistTracks,
   listPlaylists,
+  maximumPlaylistTracks,
+  maximumPlaylistsPerAccount,
+  playlistLimitMessage,
   removeTrackFromPlaylist,
 } from "@/lib/playlists";
 import { setupTestDatabase } from "./helpers/database";
@@ -146,5 +149,44 @@ describe("playlists", () => {
     expect(
       (getDatabase().prepare("SELECT COUNT(*) AS c FROM playlist_tracks").get() as { c: number }).c,
     ).toBe(0);
+  });
+});
+
+describe("playlist bounds", () => {
+  it("caps how many playlists one account can hold", () => {
+    const owner = dj("+32470003010");
+    for (let index = 0; index < maximumPlaylistsPerAccount; index += 1) {
+      createPlaylist({ accountId: owner.id, name: `Set ${index}` });
+    }
+    expect(() => createPlaylist({ accountId: owner.id, name: "One more" })).toThrow(
+      playlistLimitMessage,
+    );
+    expect(listPlaylists(owner.id)).toHaveLength(maximumPlaylistsPerAccount);
+    // Deleting one frees a slot.
+    deletePlaylist(listPlaylists(owner.id)[0].id, owner.id);
+    expect(createPlaylist({ accountId: owner.id, name: "One more" }).name).toBe("One more");
+  });
+
+  it("reports a full playlist instead of growing without limit", () => {
+    const owner = dj("+32470003011");
+    const library = createLibrary({ name: "L", description: "" });
+    const playlist = createPlaylist({ accountId: owner.id, name: "Long" });
+    for (let index = 0; index < maximumPlaylistTracks; index += 1) {
+      expect(
+        addTrackToPlaylist({
+          playlistId: playlist.id,
+          accountId: owner.id,
+          libraryTrackId: catalogueTrack(library.id, `Song ${index}`).id,
+        }),
+      ).toBe("added");
+    }
+    expect(
+      addTrackToPlaylist({
+        playlistId: playlist.id,
+        accountId: owner.id,
+        libraryTrackId: catalogueTrack(library.id, "Overflow").id,
+      }),
+    ).toBe("full");
+    expect(listPlaylistTracks(playlist.id, owner.id)).toHaveLength(maximumPlaylistTracks);
   });
 });

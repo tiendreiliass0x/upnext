@@ -97,7 +97,9 @@ Playlists belong to the account that made them. Every query is scoped by
 account, and another DJ's playlist answers 404 rather than 403 — whether it
 exists is not information they are entitled to. A playlist points at catalogue
 entries rather than copying them, so when an admin removes a song it leaves
-every playlist that held it; removal stays a real moderation lever.
+every playlist that held it; removal stays a real moderation lever. An account
+holds at most 100 playlists and a playlist at most 500 songs; past that the API
+answers 409 rather than growing without limit.
 
 "Start a room from this playlist" opens the booth at `/?playlist=<id>` with the
 draft seeded from the playlist: the room takes the playlist's name and its

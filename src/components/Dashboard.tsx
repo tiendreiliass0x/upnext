@@ -473,6 +473,9 @@ export default function Dashboard({
           })),
         );
         setError("");
+        // The seed has been consumed. Drop the parameter so a reload does not
+        // run it again over whatever the DJ has renamed, reordered or dropped.
+        window.history.replaceState({}, "", window.location.pathname);
       } catch (requestError) {
         if (!cancelled) {
           setError(

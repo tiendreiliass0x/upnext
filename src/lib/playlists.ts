@@ -29,6 +29,12 @@ function toPlaylist(row: PlaylistRow): Playlist {
   };
 }
 
+// Every other DJ-writable collection here is bounded (library tracks 500,
+// catalogue 200, session tracks 200). Without caps one token could grow a
+// playlist list until the correlated COUNT(*) per row stalls the event loop.
+export const maximumPlaylistsPerAccount = 100;
+export const maximumPlaylistTracks = 500;
+
 const playlistColumns = `p.id, p.name, p.created_at,
   (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) AS track_count`;
 
@@ -38,9 +44,10 @@ export function listPlaylists(accountId: string): Playlist[] {
       .prepare(
         `SELECT ${playlistColumns} FROM playlists p
          WHERE p.account_id = ?
-         ORDER BY p.created_at DESC`,
+         ORDER BY p.created_at DESC
+         LIMIT ?`,
       )
-      .all(accountId) as PlaylistRow[]
+      .all(accountId, maximumPlaylistsPerAccount) as PlaylistRow[]
   ).map(toPlaylist);
 }
 
@@ -55,16 +62,37 @@ export function getPlaylist(id: string, accountId: string) {
   return row ? toPlaylist(row) : null;
 }
 
-export function createPlaylist(input: { accountId: string; name: string }) {
-  const now = new Date().toISOString();
-  const id = crypto.randomUUID();
-  getDatabase()
-    .prepare(
-      `INSERT INTO playlists (id, account_id, name, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    )
-    .run(id, input.accountId, input.name, now, now);
-  return getPlaylist(id, input.accountId) as Playlist;
+export const playlistLimitMessage =
+  "You have reached the playlist limit. Delete one first.";
+
+/** Throws with playlistLimitMessage once the account holds the maximum. */
+export function createPlaylist(input: {
+  accountId: string;
+  name: string;
+}): Playlist {
+  const database = getDatabase();
+  return database
+    .transaction(() => {
+      const owned = (
+        database
+          .prepare("SELECT COUNT(*) AS count FROM playlists WHERE account_id = ?")
+          .get(input.accountId) as { count: number }
+      ).count;
+      if (owned >= maximumPlaylistsPerAccount) {
+        throw new Error(playlistLimitMessage);
+      }
+
+      const now = new Date().toISOString();
+      const id = crypto.randomUUID();
+      database
+        .prepare(
+          `INSERT INTO playlists (id, account_id, name, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(id, input.accountId, input.name, now, now);
+      return getPlaylist(id, input.accountId) as Playlist;
+    })
+    .immediate();
 }
 
 export function deletePlaylist(id: string, accountId: string) {
@@ -83,9 +111,10 @@ export function listPlaylistTracks(id: string, accountId: string): PlaylistTrack
        JOIN library_tracks t ON t.id = pt.library_track_id
        JOIN libraries l ON l.id = t.library_id
        WHERE pt.playlist_id = ?
-       ORDER BY pt.position ASC`,
+       ORDER BY pt.position ASC
+       LIMIT ?`,
     )
-    .all(accountId, id) as Array<{
+    .all(accountId, id, maximumPlaylistTracks) as Array<{
     id: string;
     library_id: string;
     title: string;
@@ -117,7 +146,8 @@ export type AddTrackResult =
   | "added"
   | "already_present"
   | "no_playlist"
-  | "no_track";
+  | "no_track"
+  | "full";
 
 export function addTrackToPlaylist(input: {
   playlistId: string;
@@ -145,14 +175,14 @@ export function addTrackToPlaylist(input: {
       if (existing) return "already_present" as const;
 
       // Append. Computed inside the transaction so two adds cannot collide on
-      // the same position.
-      const next = (
-        database
-          .prepare(
-            "SELECT COALESCE(MAX(position), -1) + 1 AS next FROM playlist_tracks WHERE playlist_id = ?",
-          )
-          .get(input.playlistId) as { next: number }
-      ).next;
+      // the same position, and so the cap cannot be raced past.
+      const { count, next } = database
+        .prepare(
+          `SELECT COUNT(*) AS count, COALESCE(MAX(position), -1) + 1 AS next
+           FROM playlist_tracks WHERE playlist_id = ?`,
+        )
+        .get(input.playlistId) as { count: number; next: number };
+      if (count >= maximumPlaylistTracks) return "full" as const;
 
       database
         .prepare(

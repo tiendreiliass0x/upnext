@@ -11,6 +11,7 @@ import { POST as addTrackRoute } from "@/app/api/playlists/[id]/tracks/route";
 import { DELETE as removeTrackRoute } from "@/app/api/playlists/[id]/tracks/[trackId]/route";
 import { GET as previewRoute } from "@/app/api/library-tracks/[id]/preview/route";
 import { addLibraryTrack, createLibrary } from "@/lib/libraries";
+import { createPlaylist, maximumPlaylistsPerAccount } from "@/lib/playlists";
 import { registerAudioUpload } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
@@ -165,6 +166,8 @@ describe("play API", () => {
       ctx({ id: track.id }),
     );
     expect(asRedirect.status).toBe(307);
+    // A signed, short-lived URL must never be served from a cache to the next caller.
+    expect(asRedirect.headers.get("Cache-Control")).toBe("no-store");
 
     // And it is still gated.
     const anonymous = await previewRoute(
@@ -172,5 +175,23 @@ describe("play API", () => {
       ctx({ id: track.id }),
     );
     expect(anonymous.status).toBe(401);
+  });
+});
+
+describe("play API bounds", () => {
+  it("answers 409 once the account is at its playlist limit", async () => {
+    const account = await dj("+32470004006");
+    for (let index = 0; index < maximumPlaylistsPerAccount; index += 1) {
+      createPlaylist({ accountId: account.account.id, name: `Set ${index}` });
+    }
+    const response = await createPlaylistRoute(
+      req("http://localhost/api/playlists", {
+        method: "POST",
+        token: account.token,
+        body: { name: "One more" },
+      }),
+    );
+    expect(response.status).toBe(409);
+    expect((await body<{ error: string }>(response)).error).toMatch(/limit/i);
   });
 });

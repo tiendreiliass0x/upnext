@@ -26,6 +26,7 @@ export default defineConfig({
         "src/lib/{accounts,admin,auth,cleanup,config,db,libraries,playlists,preview-client,sessions,audio,r2,voters}.ts",
         "src/app/api/**/*.ts",
         "src/components/Dashboard.tsx",
+        "src/components/PlayConsole.tsx",
       ],
       exclude: ["src/app/api/**/*.d.ts"],
       thresholds: {

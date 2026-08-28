@@ -37,7 +37,12 @@ export async function GET(
         { headers: { "Cache-Control": "no-store" } },
       );
     }
-    return NextResponse.redirect(url, 307);
+    // The signed URL is short-lived and per-request; never let a cache serve
+    // it to the next caller. Matches the JSON branch above.
+    return NextResponse.redirect(url, {
+      status: 307,
+      headers: { "Cache-Control": "no-store" },
+    });
   } catch {
     return NextResponse.json(
       { error: "The preview could not be loaded." },

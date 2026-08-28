@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getAccountFromRequest } from "@/lib/auth";
-import { createPlaylist, listPlaylists } from "@/lib/playlists";
+import {
+  createPlaylist,
+  listPlaylists,
+  playlistLimitMessage,
+} from "@/lib/playlists";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +35,10 @@ export async function POST(request: Request) {
       { playlist: createPlaylist({ accountId: account.id, name }) },
       { status: 201 },
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === playlistLimitMessage) {
+      return NextResponse.json({ error: error.message }, { status: 409 });
+    }
     return NextResponse.json(
       { error: "The playlist could not be created." },
       { status: 500 },
