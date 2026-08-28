@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Node is the runtime (better-sqlite3's binding is Node-ABI); bun is only
       # the package manager. Same split as the Dockerfile.
@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v3
       # Build only. deploy.yml pushes; here the point is catching a Dockerfile
       # or standalone-tracing break before it reaches main.
