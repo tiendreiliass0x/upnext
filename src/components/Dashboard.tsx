@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import {
   ArrowRight,
   ArrowUp,
@@ -1088,6 +1089,13 @@ export default function Dashboard({
                 Crowd view
               </button>
             </nav>
+          )}
+          {/* Only for a signed-in host: the catalogue is not public, so a guest
+              following this link would only meet a sign-in notice. */}
+          {!joinedViaLink && accountToken && (
+            <Link className="text-button" href="/play">
+              <ListMusic size={15} /> Play
+            </Link>
           )}
           {account ? (
             <span

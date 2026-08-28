@@ -1784,3 +1784,263 @@ button:active:not(:disabled) {
   text-decoration: underline;
   cursor: pointer;
 }
+
+/* ---- /play: catalogue, playlists, and the docked player ---- */
+
+/* Reserve room so the dock never covers the last row of a list. */
+.upnext-app.has-dock {
+  padding-bottom: 84px;
+}
+
+.play-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 260px) minmax(0, 1fr);
+  gap: 26px;
+  align-items: start;
+}
+
+@media (max-width: 780px) {
+  .play-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.play-sidebar h2,
+.play-main-head h1 {
+  margin: 0 0 12px;
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+
+.play-new {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.play-new input {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.play-new .primary-button {
+  padding: 0 12px;
+}
+
+.play-playlists {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.play-playlists li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  padding: 8px 10px;
+  background: var(--surface);
+}
+
+.play-playlists li.is-active {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.play-playlists li > button:first-child {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.play-main-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.play-main-head .library-search {
+  width: min(320px, 100%);
+}
+
+.play-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.play-rows li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--surface);
+}
+
+.play-rows li.is-current {
+  border-color: color-mix(in srgb, var(--accent) 70%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.play-rows .track-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.play-rows .track-copy small {
+  color: var(--muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.play-row-button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.play-row-button:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+.play-row-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.play-add {
+  flex: none;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  font: inherit;
+  font-size: 12px;
+}
+
+.player-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 40;
+  border-top: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 92%, var(--ink));
+  backdrop-filter: blur(10px);
+}
+
+.player-dock-inner {
+  width: min(100%, 1180px);
+  margin: 0 auto;
+  padding: 11px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.player-main-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  flex: none;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+
+.player-now {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.player-now small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.player-progress {
+  flex: 1 1 160px;
+  max-width: 320px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 14%, transparent);
+  overflow: hidden;
+}
+
+.player-progress > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 180ms linear;
+}
+
+.player-time {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+}
+
+@media (max-width: 640px) {
+  .player-now,
+  .player-progress,
+  .player-time {
+    display: none;
+  }
+  .player-dock-inner {
+    justify-content: center;
+  }
+  .player-dock-inner .track-copy.player-now {
+    display: flex;
+  }
+}

@@ -86,6 +86,26 @@ Cleanup treats a library entry as a claim on its preview, so catalogue audio
 outlives the rooms that used it. Deleting the entry releases the claim, and the
 next run reclaims the object.
 
+## Play
+
+`/play` is the listening side of the catalogue. Search every library at once,
+audition songs inline, and collect them into playlists. The song currently
+playing stays docked at the bottom of the page with transport controls and a
+progress bar, and playback advances through whatever list it was started from.
+
+Playlists belong to the account that made them. Every query is scoped by
+account, and another DJ's playlist answers 404 rather than 403 — whether it
+exists is not information they are entitled to. A playlist points at catalogue
+entries rather than copying them, so when an admin removes a song it leaves
+every playlist that held it; removal stays a real moderation lever.
+
+The preview endpoint is account-gated and an `<audio>` element cannot send a
+bearer header, so the player asks for the signed URL as JSON (`?as=json`) and
+sets that on the element. The redirect form still works for anything that
+follows redirects.
+
+Previews are 30 seconds, so this auditions songs rather than playing sets.
+
 ## Voting Identity
 
 QR guests receive a browser voter ID in local storage and can cast one free

@@ -81,6 +81,25 @@ export function getDatabase() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS playlists (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- Points at the catalogue rather than copying it, so an admin removing a
+    -- song removes it from every playlist that held it. That keeps removal
+    -- meaningful as the moderation lever.
+    CREATE TABLE IF NOT EXISTS playlist_tracks (
+      playlist_id TEXT NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+      library_track_id TEXT NOT NULL REFERENCES library_tracks(id) ON DELETE CASCADE,
+      position INTEGER NOT NULL,
+      added_at TEXT NOT NULL,
+      PRIMARY KEY (playlist_id, library_track_id)
+    );
+
     CREATE TABLE IF NOT EXISTS tracks (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -122,6 +141,13 @@ export function getDatabase() {
       ON library_tracks(preview_key);
     CREATE INDEX IF NOT EXISTS library_tracks_contributor_idx
       ON library_tracks(contributed_by);
+    CREATE INDEX IF NOT EXISTS playlists_account_idx
+      ON playlists(account_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS playlist_tracks_order_idx
+      ON playlist_tracks(playlist_id, position);
+    -- Plain index on the child key so removing a catalogue song does not scan.
+    CREATE INDEX IF NOT EXISTS playlist_tracks_library_idx
+      ON playlist_tracks(library_track_id);
     CREATE INDEX IF NOT EXISTS votes_session_idx
       ON votes(session_id);
     CREATE INDEX IF NOT EXISTS anonymous_votes_track_idx

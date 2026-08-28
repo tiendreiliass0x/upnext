@@ -111,6 +111,13 @@ export function deleteLibrary(id: string) {
     .changes;
 }
 
+// LIKE with escaped wildcards: a search for "100%" must match the one title
+// containing a percent sign, not the whole catalogue. Shared so both search
+// paths escape identically.
+function likePattern(search: string) {
+  return `%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
+}
+
 export function listLibraryTracks(input: {
   libraryId: string;
   query?: string;
@@ -132,8 +139,7 @@ export function listLibraryTracks(input: {
     ).map(toLibraryTrack);
   }
 
-  // LIKE with escaped wildcards: a search for "100%" must not match everything.
-  const pattern = `%${search.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const pattern = likePattern(search);
   return (
     database
       .prepare(
@@ -145,6 +151,45 @@ export function listLibraryTracks(input: {
       )
       .all(input.libraryId, pattern, pattern, limit) as LibraryTrackRow[]
   ).map(toLibraryTrack);
+}
+
+export type CatalogueTrack = LibraryTrack & { libraryName: string };
+
+/**
+ * Search every library at once. The picker in the booth scopes to one library
+ * because a DJ is building from a chosen set; /play searches the whole
+ * catalogue because you are looking for a song, not a shelf.
+ */
+export function searchCatalogue(input: { query?: string; limit?: number }): CatalogueTrack[] {
+  const limit = Math.min(Math.max(input.limit ?? 100, 1), 200);
+  const search = input.query?.trim() ?? "";
+  const database = getDatabase();
+  const columns = `t.id, t.library_id, t.title, t.artist, t.preview_key,
+                   t.contributed_by, t.created_at, l.name AS library_name`;
+
+  const rows = (
+    search
+      ? database
+          .prepare(
+            `SELECT ${columns}
+             FROM library_tracks t JOIN libraries l ON l.id = t.library_id
+             WHERE t.title LIKE ? ESCAPE '\\' OR t.artist LIKE ? ESCAPE '\\'
+             ORDER BY t.title COLLATE NOCASE ASC LIMIT ?`,
+          )
+          .all(likePattern(search), likePattern(search), limit)
+      : database
+          .prepare(
+            `SELECT ${columns}
+             FROM library_tracks t JOIN libraries l ON l.id = t.library_id
+             ORDER BY t.created_at DESC LIMIT ?`,
+          )
+          .all(limit)
+  ) as Array<LibraryTrackRow & { library_name: string }>;
+
+  return rows.map((row) => ({
+    ...toLibraryTrack(row),
+    libraryName: row.library_name,
+  }));
 }
 
 export function addLibraryTrack(input: {

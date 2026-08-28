@@ -27,7 +27,17 @@ export async function GET(
   }
 
   try {
-    return NextResponse.redirect(await getPreviewUrl(objectKey), 307);
+    const url = await getPreviewUrl(objectKey);
+    // An <audio src> cannot carry an Authorization header, and a same-origin
+    // redirect read with redirect:"manual" comes back opaque, so the player
+    // asks for the signed URL as JSON and sets it on the element itself.
+    if (new URL(request.url).searchParams.get("as") === "json") {
+      return NextResponse.json(
+        { url },
+        { headers: { "Cache-Control": "no-store" } },
+      );
+    }
+    return NextResponse.redirect(url, 307);
   } catch {
     return NextResponse.json(
       { error: "The preview could not be loaded." },
