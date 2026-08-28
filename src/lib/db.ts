@@ -52,7 +52,10 @@ export function getDatabase() {
       revision INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
-      ended_at TEXT
+      ended_at TEXT,
+      -- What the DJ has on: a soft pointer into tracks, cleared with the row.
+      now_playing_track_id TEXT,
+      now_playing_started_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS audio_uploads (
@@ -107,7 +110,9 @@ export function getDatabase() {
       title TEXT NOT NULL,
       artist TEXT NOT NULL,
       position INTEGER NOT NULL,
-      preview_key TEXT REFERENCES audio_uploads(object_key)
+      preview_key TEXT REFERENCES audio_uploads(object_key),
+      -- Set when the DJ plays it; a played song leaves the ballot.
+      played_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS votes (
@@ -226,6 +231,18 @@ export function getDatabase() {
   }>;
   if (!sessionColumns.some((column) => column.name === "request_id")) {
     database.exec("ALTER TABLE sessions ADD COLUMN request_id TEXT");
+  }
+  if (!sessionColumns.some((column) => column.name === "now_playing_track_id")) {
+    database.exec(`
+      ALTER TABLE sessions ADD COLUMN now_playing_track_id TEXT;
+      ALTER TABLE sessions ADD COLUMN now_playing_started_at TEXT;
+    `);
+  }
+  const trackColumns = database.pragma("table_info(tracks)") as Array<{
+    name: string;
+  }>;
+  if (!trackColumns.some((column) => column.name === "played_at")) {
+    database.exec("ALTER TABLE tracks ADD COLUMN played_at TEXT");
   }
   const uploadColumns = database.pragma("table_info(audio_uploads)") as Array<{
     name: string;

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Dashboard, {
   IdentityGate,
@@ -18,6 +18,7 @@ const tracks: SessionTrack[] = [
     votes: 2,
     position: 0,
     previewUrl: "/api/tracks/track-one/preview",
+    playedAt: null,
   },
   {
     id: "track-two",
@@ -26,6 +27,7 @@ const tracks: SessionTrack[] = [
     votes: 1,
     position: 1,
     previewUrl: "/api/tracks/track-two/preview",
+    playedAt: null,
   },
 ];
 
@@ -127,6 +129,7 @@ describe("identity onboarding", () => {
       guestCount: totalVotes > 0 ? 1 : 0,
       votedTrackIds,
       anonymousVoteUsed: votedTrackIds.length > 0,
+      nowPlaying: null,
       tracks: [
         { ...tracks[0], votes: totalVotes > 0 ? 1 : 0 },
         { ...tracks[1], votes: totalVotes > 1 ? 1 : 0 },
@@ -228,6 +231,7 @@ describe("identity onboarding", () => {
             guestCount: 0,
             votedTrackIds: [],
             anonymousVoteUsed: false,
+            nowPlaying: null,
             tracks: [{ ...tracks[0], votes: 0 }],
           },
         }),
@@ -259,6 +263,7 @@ describe("conditional room polling", () => {
     guestCount: 0,
     votedTrackIds: [],
     anonymousVoteUsed: false,
+    nowPlaying: null,
     tracks,
   });
 
@@ -320,6 +325,7 @@ describe("guest link reachability", () => {
     guestCount: 0,
     votedTrackIds: [],
     anonymousVoteUsed: false,
+    nowPlaying: null,
     tracks,
   };
 
@@ -667,5 +673,85 @@ describe("the playlist seed parameter", () => {
 
     await screen.findByDisplayValue("Warm Up Set", {}, { timeout: 3000 });
     expect(window.location.search).toBe("");
+  });
+});
+
+describe("now playing", () => {
+  const room: PublicSession = {
+    id: "ABC123",
+    name: "Room",
+    venue: "",
+    createdAt: "2026-08-26T00:00:00.000Z",
+    revision: 3,
+    totalVotes: 0,
+    guestCount: 0,
+    votedTrackIds: [],
+    anonymousVoteUsed: false,
+    nowPlaying: {
+      trackId: "track-one",
+      title: "First Track",
+      artist: "Artist A",
+      previewUrl: "/api/tracks/track-one/preview",
+      startedAt: new Date(Date.now() - 20_000).toISOString(),
+    },
+    tracks: [{ ...tracks[0], playedAt: "2026-08-26T00:00:00.000Z" }, tracks[1]],
+  };
+
+  it("docks the DJ's song under the ballot and takes the played track off the ballot", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: room })),
+    );
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    const dock = await screen.findByRole("region", { name: "Now playing" }, { timeout: 3000 });
+    expect(within(dock).getByText("First Track")).toBeInTheDocument();
+    expect(within(dock).getByRole("button", { name: "Listen along" })).toBeEnabled();
+    // The crowd pick is the next unplayed song, and a played one cannot be voted for.
+    expect(screen.getByText(/Second Track is ranked first/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /vote for first track/i })).toBeDisabled();
+  });
+
+  it("lets the DJ put the crowd pick on and adopts the returned room", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    const played: PublicSession = {
+      ...room,
+      revision: 4,
+      nowPlaying: { ...room.nowPlaying!, trackId: "track-two", title: "Second Track", artist: "Artist B" },
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, init });
+        if (url === "/api/accounts") {
+          return Response.json({ account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" } });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({
+            activeRoom: { session: { ...room, nowPlaying: null }, hostKey: "host-key" },
+            guestBaseUrl: "https://upnext.example",
+          });
+        }
+        if (url.endsWith("/now-playing")) return Response.json({ session: played });
+        return Response.json({ session: { ...room, nowPlaying: null } });
+      }),
+    );
+    render(<Dashboard />);
+
+    const play = await screen.findByRole(
+      "button",
+      { name: /play crowd pick: second track/i },
+      { timeout: 3000 },
+    );
+    await user.click(play);
+
+    await screen.findByText("Second Track", { selector: ".now-playing-copy strong" });
+    const change = calls.find((call) => call.url.endsWith("/now-playing"));
+    expect(change?.init?.method).toBe("POST");
+    expect((change?.init?.headers as Record<string, string>)["x-upnext-host-key"]).toBe("host-key");
+    expect(JSON.parse(String(change?.init?.body))).toEqual({ trackId: "next" });
   });
 });

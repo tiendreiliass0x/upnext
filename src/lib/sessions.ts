@@ -7,6 +7,15 @@ export type SessionTrack = {
   votes: number;
   position: number;
   previewUrl: string | null;
+  playedAt: string | null;
+};
+
+export type NowPlaying = {
+  trackId: string;
+  title: string;
+  artist: string;
+  previewUrl: string | null;
+  startedAt: string;
 };
 
 export type PublicSession = {
@@ -19,6 +28,7 @@ export type PublicSession = {
   guestCount: number;
   votedTrackIds: string[];
   anonymousVoteUsed: boolean;
+  nowPlaying: NowPlaying | null;
   tracks: SessionTrack[];
 };
 
@@ -30,6 +40,8 @@ type SessionRow = {
   expires_at: string;
   ended_at: string | null;
   revision: number;
+  now_playing_track_id: string | null;
+  now_playing_started_at: string | null;
 };
 
 type TrackRow = {
@@ -38,8 +50,13 @@ type TrackRow = {
   artist: string;
   position: number;
   preview_key: string | null;
+  played_at: string | null;
   votes: number;
 };
+
+function trackPreviewUrl(trackId: string, previewKey: string | null) {
+  return previewKey ? `/api/tracks/${encodeURIComponent(trackId)}/preview` : null;
+}
 
 const sessionLifetime = 24 * 60 * 60 * 1000;
 
@@ -72,7 +89,8 @@ function getPublicSession(sessionId: string, accountId?: string) {
   return database.transaction(() => {
     const session = database
       .prepare(
-        `SELECT id, name, venue, created_at, expires_at, ended_at, revision
+        `SELECT id, name, venue, created_at, expires_at, ended_at, revision,
+                now_playing_track_id, now_playing_started_at
          FROM sessions
          WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
       )
@@ -81,9 +99,11 @@ function getPublicSession(sessionId: string, accountId?: string) {
       | undefined;
     if (!session) return null;
 
+    // Played songs sink below the ballot: their vote has been spent, and the
+    // crowd pick has to be something the DJ has not played yet.
     const tracks = database
       .prepare(
-        `SELECT t.id, t.title, t.artist, t.position, t.preview_key,
+        `SELECT t.id, t.title, t.artist, t.position, t.preview_key, t.played_at,
                  COUNT(v.track_id) AS votes
          FROM tracks t
          LEFT JOIN (
@@ -93,7 +113,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
          ) v ON v.track_id = t.id
          WHERE t.session_id = ?
          GROUP BY t.id
-         ORDER BY votes DESC, t.position ASC`,
+         ORDER BY (t.played_at IS NOT NULL) ASC, votes DESC, t.position ASC`,
       )
       .all(session.id, session.id, session.id) as TrackRow[];
     const totals = database
@@ -122,6 +142,10 @@ function getPublicSession(sessionId: string, accountId?: string) {
         ).map((vote) => vote.track_id)
       : [];
 
+    const playing = session.now_playing_track_id
+      ? tracks.find((track) => track.id === session.now_playing_track_id)
+      : undefined;
+
     return {
       id: session.id,
       name: session.name,
@@ -132,15 +156,24 @@ function getPublicSession(sessionId: string, accountId?: string) {
       guestCount: totals.guest_count,
       votedTrackIds,
       anonymousVoteUsed: false,
+      nowPlaying:
+        playing && session.now_playing_started_at
+          ? {
+              trackId: playing.id,
+              title: playing.title,
+              artist: playing.artist,
+              previewUrl: trackPreviewUrl(playing.id, playing.preview_key),
+              startedAt: session.now_playing_started_at,
+            }
+          : null,
       tracks: tracks.map((track) => ({
         id: track.id,
         title: track.title,
         artist: track.artist,
         votes: track.votes,
         position: track.position,
-        previewUrl: track.preview_key
-          ? `/api/tracks/${encodeURIComponent(track.id)}/preview`
-          : null,
+        previewUrl: trackPreviewUrl(track.id, track.preview_key),
+        playedAt: track.played_at,
       })),
     } satisfies PublicSession;
   })();
@@ -328,6 +361,83 @@ export function endSession(input: {
         .prepare("UPDATE sessions SET ended_at = ? WHERE id = ?")
         .run(now, session.id);
       return "ended" as const;
+    })
+    .immediate();
+}
+
+/**
+ * Put a song on. "next" takes the top-voted track that has not been played
+ * yet — the crowd's pick — and null takes the current one off. A played song
+ * is stamped so it leaves the ballot, and the revision bumps so every guest's
+ * next poll carries the change.
+ */
+export function setNowPlaying(input: {
+  sessionId: string;
+  hostKey: string;
+  accountId: string;
+  trackId: string | "next" | null;
+}) {
+  const database = getDatabase();
+  return database
+    .transaction(() => {
+      const now = new Date().toISOString();
+      const session = database
+        .prepare(
+          `SELECT id, host_key, host_account_id FROM sessions
+           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+        )
+        .get(input.sessionId.toUpperCase(), now) as
+        | { id: string; host_key: string; host_account_id: string }
+        | undefined;
+      if (!session) return "not_found" as const;
+      if (
+        session.host_key !== input.hostKey ||
+        session.host_account_id !== input.accountId
+      ) {
+        return "forbidden" as const;
+      }
+
+      let trackId: string | null = null;
+      if (input.trackId === "next") {
+        const next = database
+          .prepare(
+            `SELECT t.id, COUNT(v.track_id) AS votes
+             FROM tracks t
+             LEFT JOIN (
+               SELECT track_id FROM votes WHERE session_id = ?
+               UNION ALL
+               SELECT track_id FROM anonymous_votes WHERE session_id = ?
+             ) v ON v.track_id = t.id
+             WHERE t.session_id = ? AND t.played_at IS NULL
+             GROUP BY t.id
+             ORDER BY votes DESC, t.position ASC
+             LIMIT 1`,
+          )
+          .get(session.id, session.id, session.id) as { id: string } | undefined;
+        if (!next) return "no_track" as const;
+        trackId = next.id;
+      } else if (input.trackId) {
+        const track = database
+          .prepare("SELECT id FROM tracks WHERE id = ? AND session_id = ?")
+          .get(input.trackId, session.id) as { id: string } | undefined;
+        if (!track) return "no_track" as const;
+        trackId = track.id;
+      }
+
+      if (trackId) {
+        database
+          .prepare("UPDATE tracks SET played_at = ? WHERE id = ? AND played_at IS NULL")
+          .run(now, trackId);
+      }
+      database
+        .prepare(
+          `UPDATE sessions
+           SET now_playing_track_id = ?, now_playing_started_at = ?,
+               revision = revision + 1
+           WHERE id = ?`,
+        )
+        .run(trackId, trackId ? now : null, session.id);
+      return "updated" as const;
     })
     .immediate();
 }

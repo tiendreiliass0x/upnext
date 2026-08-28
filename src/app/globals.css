@@ -2044,3 +2044,63 @@ button:active:not(:disabled) {
     display: flex;
   }
 }
+
+/* Now playing: DJ panel in the queue, guest dock under the ballot. */
+.now-playing-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 18px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent));
+}
+.now-playing-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.now-playing-copy strong {
+  font-size: 1.05rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.now-playing-copy > span:not(.eyebrow) {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.now-playing-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.now-playing-actions .primary-button {
+  max-width: 100%;
+}
+.now-playing-dock .player-now {
+  flex: 1;
+  min-width: 0;
+}
+.now-playing-dock .now-playing-label {
+  display: block;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.68rem;
+  color: var(--accent);
+}
+.now-playing-dock .player-main-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.queue-list li.is-played {
+  opacity: 0.55;
+}
+.queue-list li.is-played .vote-button {
+  cursor: not-allowed;
+}

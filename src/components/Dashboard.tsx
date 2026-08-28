@@ -28,6 +28,7 @@ import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import { readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
+import type { NowPlaying } from "@/lib/sessions";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
 type AppView = "dj" | "guest";
@@ -222,6 +223,136 @@ function disposeAudio(audio: HTMLAudioElement) {
   audio.load();
 }
 
+// One song at a time, whichever component started it: a guest auditioning a
+// row while the DJ's song is on would otherwise hear both.
+let exclusiveAudio: HTMLAudioElement | null = null;
+function claimAudio(audio: HTMLAudioElement) {
+  if (exclusiveAudio && exclusiveAudio !== audio) exclusiveAudio.pause();
+  exclusiveAudio = audio;
+}
+
+function formatClock(seconds: number) {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+/**
+ * The song the DJ has on, docked under the ballot. Playback needs a tap the
+ * first time (browsers block unprompted audio), after which a change of song
+ * follows automatically. A late joiner starts partway through, offset by how
+ * long the DJ has had it on, so the phone roughly tracks the room.
+ */
+export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [listening, setListening] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const { trackId, previewUrl, startedAt } = nowPlaying;
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    setPosition(0);
+    setDuration(0);
+    setFailed(false);
+    if (!listening || !previewUrl) {
+      audio.pause();
+      audio.removeAttribute("src");
+      audio.load();
+      setIsPlaying(false);
+      return;
+    }
+    let cancelled = false;
+    const offset = Math.max(0, (Date.now() - Date.parse(startedAt)) / 1000);
+    audio.src = previewUrl;
+    audio.onloadedmetadata = () => {
+      if (cancelled) return;
+      if (Number.isFinite(audio.duration) && offset < audio.duration) {
+        audio.currentTime = offset;
+      }
+    };
+    claimAudio(audio);
+    audio.play().catch(() => {
+      if (!cancelled) setFailed(true);
+    });
+    return () => {
+      cancelled = true;
+      audio.onloadedmetadata = null;
+    };
+  }, [listening, previewUrl, startedAt, trackId]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    return () => {
+      if (audio) disposeAudio(audio);
+    };
+  }, []);
+
+  return (
+    <div className="player-dock now-playing-dock" role="region" aria-label="Now playing">
+      <div className="player-dock-inner">
+        <button
+          type="button"
+          className="player-main-button"
+          aria-label={isPlaying ? "Pause the DJ's song" : "Listen along"}
+          disabled={!previewUrl}
+          onClick={() => {
+            const audio = audioRef.current;
+            if (!audio) return;
+            if (!listening) {
+              setListening(true);
+            } else if (audio.paused) {
+              claimAudio(audio);
+              audio.play().catch(() => setFailed(true));
+            } else {
+              audio.pause();
+            }
+          }}
+        >
+          {isPlaying ? <Pause size={18} /> : <Play size={18} />}
+        </button>
+        <span className="track-copy player-now">
+          <small className="now-playing-label">DJ is playing</small>
+          <strong>{nowPlaying.title}</strong>
+          <small>
+            {nowPlaying.artist}
+            {!previewUrl ? " · no audio for this one" : failed ? " · could not play" : ""}
+          </small>
+        </span>
+        {listening && previewUrl && (
+          <>
+            <span className="player-progress" aria-hidden="true">
+              <span
+                style={{
+                  width: `${duration > 0 ? Math.min(100, (position / duration) * 100) : 0}%`,
+                }}
+              />
+            </span>
+            <span className="player-time">
+              {formatClock(position)}{duration > 0 ? ` / ${formatClock(duration)}` : ""}
+            </span>
+          </>
+        )}
+        <audio
+          ref={audioRef}
+          preload="none"
+          onPlay={() => setIsPlaying(true)}
+          onPause={() => setIsPlaying(false)}
+          onEnded={() => setIsPlaying(false)}
+          onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
+          onDurationChange={(event) => {
+            const value = event.currentTarget.duration;
+            setDuration(Number.isFinite(value) ? value : 0);
+          }}
+          onError={() => setFailed(true)}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function Dashboard({
   initialSessionId = "",
   initialPlaylistId = "",
@@ -262,6 +393,7 @@ export default function Dashboard({
     !Boolean(sharedSessionId),
   );
   const [isEnding, setIsEnding] = useState(false);
+  const [isChangingTrack, setIsChangingTrack] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(
     Boolean(sharedSessionId),
   );
@@ -1017,6 +1149,45 @@ export default function Dashboard({
     window.history.replaceState({}, "", window.location.pathname);
   }
 
+  async function changeNowPlaying(trackId: string | "next" | null) {
+    if (!activeSessionId || !hostKey || isChangingTrack) return;
+    const roomId = activeSessionId;
+    setIsChangingTrack(true);
+    setError("");
+    try {
+      const response = await fetchWithTimeout(
+        `/api/sessions/${encodeURIComponent(roomId)}/now-playing`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-upnext-host-key": hostKey,
+            Authorization: `Bearer ${accountToken}`,
+          },
+          body: JSON.stringify({ trackId }),
+        },
+      );
+      const data = (await response.json()) as {
+        session?: PublicSession | null;
+        error?: string;
+      };
+      if (!response.ok || !data.session) {
+        throw new Error(data.error || "The song could not be changed.");
+      }
+      if (activeSessionIdRef.current !== roomId) return;
+      const next = data.session;
+      const latest = sessionRevisionRef.current;
+      if (!latest || latest.id !== next.id || latest.revision <= next.revision) {
+        sessionRevisionRef.current = { id: next.id, revision: next.revision };
+        setSession(next);
+      }
+    } catch (changeError) {
+      setError(getErrorMessage(changeError));
+    } finally {
+      setIsChangingTrack(false);
+    }
+  }
+
   async function endCurrentSession() {
     if (!activeSessionId || !hostKey || isEnding) return;
 
@@ -1102,6 +1273,7 @@ export default function Dashboard({
     guestCount: 0,
     votedTrackIds: [],
     anonymousVoteUsed: false,
+    nowPlaying: null,
     tracks: draftTracks.map((track, position) => ({
       id: track.id,
       title: track.title,
@@ -1109,12 +1281,15 @@ export default function Dashboard({
       votes: 0,
       position,
       previewUrl: null,
+      playedAt: null,
     })),
   };
+  const guestDockVisible =
+    view === "guest" && !roomMissing && Boolean(session?.nowPlaying);
   const visibleError = error || roomError;
 
   return (
-    <div className="upnext-app">
+    <div className={`upnext-app${guestDockVisible ? " has-dock" : ""}`}>
       <header className="app-header">
         <button
           type="button"
@@ -1243,6 +1418,8 @@ export default function Dashboard({
           onCopy={copySessionLink}
           onOpenGuest={() => setView("guest")}
           onEnd={() => void endCurrentSession()}
+          isChangingTrack={isChangingTrack}
+          onPlay={(trackId) => void changeNowPlaying(trackId)}
         />
       )}
 
@@ -1710,6 +1887,8 @@ type DJLiveRoomProps = {
   onCopy: () => void;
   onOpenGuest: () => void;
   onEnd: () => void;
+  isChangingTrack: boolean;
+  onPlay: (trackId: string | "next" | null) => void;
 };
 
 function DJLiveRoom({
@@ -1722,10 +1901,13 @@ function DJLiveRoom({
   onCopy,
   onOpenGuest,
   onEnd,
+  isChangingTrack,
+  onPlay,
 }: DJLiveRoomProps) {
   if (isLoading || !session || !sessionLink) {
     return <LoadingRoom label="Opening the room" />;
   }
+  const nextUp = session.tracks.find((track) => !track.playedAt);
 
   return (
     <main className="live-page page-shell">
@@ -1817,6 +1999,40 @@ function DJLiveRoom({
               <span><strong>{session.totalVotes}</strong> votes</span>
             </div>
           </div>
+          <section className="now-playing-panel" aria-labelledby="now-playing-title">
+            <div className="now-playing-copy">
+              <span className="eyebrow"><AudioLines size={14} /> Now playing</span>
+              {session.nowPlaying ? (
+                <>
+                  <strong id="now-playing-title">{session.nowPlaying.title}</strong>
+                  <span>{session.nowPlaying.artist}</span>
+                </>
+              ) : (
+                <strong id="now-playing-title">Nothing on yet</strong>
+              )}
+            </div>
+            <div className="now-playing-actions">
+              <button
+                type="button"
+                className="primary-button"
+                disabled={isChangingTrack || !nextUp}
+                onClick={() => onPlay("next")}
+              >
+                <Play size={16} fill="currentColor" />
+                {nextUp ? `Play crowd pick: ${nextUp.title}` : "Every track played"}
+              </button>
+              {session.nowPlaying && (
+                <button
+                  type="button"
+                  className="text-button"
+                  disabled={isChangingTrack}
+                  onClick={() => onPlay(null)}
+                >
+                  Take it off
+                </button>
+              )}
+            </div>
+          </section>
           <QueueList tracks={session.tracks} />
         </section>
       </div>
@@ -1849,7 +2065,7 @@ function GuestRoom({
 }: GuestRoomProps) {
   if (isLoading) return <LoadingRoom label="Joining the room" />;
 
-  const topTrack = session.tracks[0];
+  const topTrack = session.tracks.find((track) => !track.playedAt);
 
   return (
     <main className="guest-page page-shell">
@@ -1927,6 +2143,7 @@ function GuestRoom({
           ? "One free vote per room. Add your phone to keep voting."
           : "Tap once per track. The most-voted track stays on top."}
       </p>
+      {session.nowPlaying && <NowPlayingDock nowPlaying={session.nowPlaying} />}
     </main>
   );
 }
@@ -1990,6 +2207,7 @@ export function QueueList({
     };
 
     try {
+      claimAudio(audio);
       await audio.play();
       if (audioRef.current === audio) setPlayingTrackId(track.id);
     } catch {
@@ -2008,9 +2226,13 @@ export function QueueList({
       {tracks.map((track, index) => {
         const hasVote = votedTrackIds.has(track.id);
         const isPending = pendingVotes.has(track.id);
+        const played = Boolean(track.playedAt);
 
         return (
-          <li key={track.id} className={index === 0 ? "is-leading" : ""}>
+          <li
+            key={track.id}
+            className={`${index === 0 && !played ? "is-leading" : ""}${played ? " is-played" : ""}`}
+          >
             <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
             {track.previewUrl ? (
               <button
@@ -2037,7 +2259,7 @@ export function QueueList({
               <strong>{track.title}</strong>
               <small>
                 {track.artist}
-                
+                {played ? " · played" : ""}
               </small>
             </span>
             {interactive ? (
@@ -2045,7 +2267,7 @@ export function QueueList({
                 type="button"
                 className={`vote-button ${hasVote ? "has-vote" : ""}`}
                 onClick={() => onVote?.(track.id)}
-                disabled={isPending || (lockSelectedVotes && hasVote)}
+                disabled={played || isPending || (lockSelectedVotes && hasVote)}
                 aria-label={`${hasVote ? lockSelectedVotes ? "Vote saved for" : "Remove vote from" : "Vote for"} ${track.title}, ${track.votes} ${track.votes === 1 ? "vote" : "votes"}`}
                 aria-pressed={hasVote}
               >

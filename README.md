@@ -121,6 +121,25 @@ follows redirects.
 
 Songs play in full, so a playlist here is a listenable set, not just an audition.
 
+## Now Playing
+
+The live booth has a **Now playing** panel with one main action: *Play crowd
+pick*, which puts on the top-voted song that has not been played yet. The DJ
+can also take a song off. Each change stamps the track as played and bumps the
+room revision, so every guest's next poll carries it.
+
+A played song sinks below the ballot and can no longer be voted for — its vote
+has been spent, and the "crowd pick" shown to guests is always the next
+*unplayed* song. Votes already on a played track are kept, not deleted, so the
+counts stay honest.
+
+Guests see the song docked under the ballot with a *Listen along* button.
+Browsers refuse unprompted audio, so the first song needs a tap; after that a
+change of song follows automatically. A late joiner starts partway through,
+offset by how long the DJ has had the song on, so a phone roughly tracks the
+room rather than restarting from the top. This is phone playback of the same
+file, not a synced broadcast — expect drift of a second or two.
+
 ## Voting Identity
 
 QR guests receive a browser voter ID in local storage and can cast one free
