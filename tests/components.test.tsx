@@ -247,6 +247,67 @@ describe("identity onboarding", () => {
   });
 });
 
+describe("conditional room polling", () => {
+  const room = (revision: number): PublicSession => ({
+    id: "ABC123",
+    name: "Conditional Room",
+    venue: "Test Venue",
+    createdAt: "2026-08-26T00:00:00.000Z",
+    revision,
+    totalVotes: 0,
+    guestCount: 0,
+    votedTrackIds: [],
+    anonymousVoteUsed: false,
+    tracks,
+  });
+
+  it("keeps the room on screen when the server answers 304", async () => {
+    let roomRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (!url.startsWith("/api/sessions/")) return Response.json({ session: room(0) });
+      roomRequests += 1;
+      const headers = new Headers(init?.headers);
+      if (headers.get("If-None-Match") === '"ABC123-0-viewer"') {
+        return new Response(null, { status: 304, headers: { ETag: '"ABC123-0-viewer"' } });
+      }
+      return Response.json({ session: room(0) }, { headers: { ETag: '"ABC123-0-viewer"' } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    expect(await screen.findByText("Conditional Room")).toBeInTheDocument();
+    // The poll reschedules every 2s, so wait past one interval for the 304.
+    await waitFor(() => expect(roomRequests).toBeGreaterThan(1), { timeout: 5000 });
+    expect(screen.getByText("Conditional Room")).toBeInTheDocument();
+    expect(screen.getAllByText("First Track").length).toBeGreaterThan(0);
+  });
+
+  it("recovers when a 304 arrives before any room payload was held", async () => {
+    // A conditional request must never be sent without the representation it
+    // claims to hold. If one somehow is, the client has to refetch rather than
+    // loop on 304 with an empty screen.
+    let roomRequests = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (!url.startsWith("/api/sessions/")) return Response.json({ session: room(0) });
+      roomRequests += 1;
+      if (roomRequests === 1) {
+        return new Response(null, { status: 304, headers: { ETag: '"ABC123-0-viewer"' } });
+      }
+      return Response.json({ session: room(0) }, { headers: { ETag: '"ABC123-0-viewer"' } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    // Recovery costs one poll interval, so allow more than the 1s default.
+    expect(
+      await screen.findByText("Conditional Room", {}, { timeout: 5000 }),
+    ).toBeInTheDocument();
+    expect(roomRequests).toBeGreaterThan(1);
+  });
+});
+
 describe("queue interactions", () => {
   it("plays one preview at a time and ignores stale media events", async () => {
     const user = userEvent.setup();

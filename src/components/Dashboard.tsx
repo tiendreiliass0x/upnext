@@ -404,7 +404,7 @@ export default function Dashboard({
               ...(accountToken
                 ? { Authorization: `Bearer ${accountToken}` }
                 : { "x-upnext-voter-id": voterId }),
-              ...(knownTag && knownTag.id === activeSessionId
+              ...(knownTag && knownTag.id === activeSessionId.toUpperCase()
                 ? { "If-None-Match": knownTag.tag }
                 : {}),
             },
@@ -414,6 +414,16 @@ export default function Dashboard({
         // The room is unchanged, so there is no body to read and no state to
         // replace. Skipping the update also avoids a re-render on every poll.
         if (response.status === 304) {
+          // Defensive, and unreachable by construction: the tag is now only
+          // stored when the payload is adopted, so holding one implies holding
+          // the room. Kept because the failure it guards is a permanently
+          // blank room, and dev-mode Fast Refresh can preserve a ref while
+          // resetting the state beside it.
+          const held = sessionRevisionRef.current;
+          if (!held || held.id !== activeSessionId.toUpperCase()) {
+            sessionTagRef.current = null;
+            return;
+          }
           if (!cancelled) {
             setRoomMissing(false);
             setRoomError("");
@@ -447,9 +457,6 @@ export default function Dashboard({
         if (!cancelled) {
           const nextSession = data.session;
           const responseTag = response.headers.get("etag");
-          sessionTagRef.current = responseTag
-            ? { id: nextSession.id, tag: responseTag }
-            : null;
           const latestRevision = sessionRevisionRef.current;
           if (
             !latestRevision ||
@@ -460,6 +467,13 @@ export default function Dashboard({
               id: nextSession.id,
               revision: nextSession.revision,
             };
+            // Only now do we actually hold this room. If-None-Match asserts
+            // "I already have this version", so storing the tag for a payload
+            // we discarded would ask the server to skip a body we never
+            // rendered, and the room would never appear.
+            sessionTagRef.current = responseTag
+              ? { id: nextSession.id, tag: responseTag }
+              : null;
             setSession(nextSession);
             setVotedTrackIds(new Set(nextSession.votedTrackIds));
             if (!accountToken) {
