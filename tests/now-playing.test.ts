@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { POST as nowPlayingRoute } from "@/app/api/sessions/[id]/now-playing/route";
 import { GET as getRoom } from "@/app/api/sessions/[id]/route";
+import { POST as voteRoute } from "@/app/api/sessions/[id]/vote/route";
 import { createAccount } from "@/lib/accounts";
 import {
+  alreadyPlayedMessage,
   castAnonymousVote,
   createSession,
   getSession,
   setNowPlaying,
+  toggleVote,
 } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
@@ -153,5 +156,76 @@ describe("POST /api/sessions/[id]/now-playing", () => {
       await call(session.id, host.authToken, hostKey, { trackId: "next" });
     }
     expect((await call(session.id, host.authToken, hostKey, { trackId: "next" })).status).toBe(409);
+  });
+});
+
+describe("voting on a played track", () => {
+  function request(url: string, init: { body: unknown; token?: string; voterId?: string }) {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (init.token) headers.Authorization = `Bearer ${init.token}`;
+    if (init.voterId) headers["x-upnext-voter-id"] = init.voterId;
+    return new Request(url, { method: "POST", headers, body: JSON.stringify(init.body) });
+  }
+
+  it("is refused, so a guest whose poll has not caught up cannot spend a vote on it", () => {
+    const host = createAccount({ phone: "+32470000070", pseudonym: "Host" });
+    const guest = createAccount({ phone: "+32470000071", pseudonym: "Guest" });
+    const { session, hostKey } = room(host.id);
+    const played = trackId(session.id, "Opener");
+    expect(
+      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: played }),
+    ).toBe("updated");
+
+    expect(() =>
+      toggleVote({ sessionId: session.id, trackId: played, accountId: guest.id, enabled: true }),
+    ).toThrow(alreadyPlayedMessage);
+    expect(
+      castAnonymousVote({ sessionId: session.id, trackId: played, voterId: "late-phone-1" }),
+    ).toMatchObject({ status: "already_played" });
+    // The free vote was not consumed by the refusal.
+    expect(
+      castAnonymousVote({
+        sessionId: session.id,
+        trackId: trackId(session.id, "Banger"),
+        voterId: "late-phone-1",
+      }),
+    ).toMatchObject({ status: "voted" });
+  });
+
+  it("still lets an account take its earlier vote back off a played track", () => {
+    const host = createAccount({ phone: "+32470000072", pseudonym: "Host" });
+    const guest = createAccount({ phone: "+32470000073", pseudonym: "Guest" });
+    const { session, hostKey } = room(host.id);
+    const played = trackId(session.id, "Opener");
+    toggleVote({ sessionId: session.id, trackId: played, accountId: guest.id, enabled: true });
+    setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: played });
+
+    const result = toggleVote({
+      sessionId: session.id,
+      trackId: played,
+      accountId: guest.id,
+      enabled: false,
+    });
+    expect(result?.voted).toBe(false);
+  });
+
+  it("answers 409 with a code the client can act on", async () => {
+    const host = createAccount({ phone: "+32470000074", pseudonym: "Host" });
+    const guest = createAccount({ phone: "+32470000075", pseudonym: "Guest" });
+    const { session, hostKey } = room(host.id);
+    const played = trackId(session.id, "Opener");
+    setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: played });
+
+    for (const init of [
+      { body: { trackId: played, enabled: true }, token: guest.authToken },
+      { body: { trackId: played, enabled: true }, voterId: "late-phone-voter-0002" },
+    ]) {
+      const response = await voteRoute(
+        request(`http://localhost/api/sessions/${session.id}/vote`, init),
+        { params: Promise.resolve({ id: session.id }) },
+      );
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({ code: "ALREADY_PLAYED" });
+    }
   });
 });

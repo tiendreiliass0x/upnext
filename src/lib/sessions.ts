@@ -442,6 +442,8 @@ export function setNowPlaying(input: {
     .immediate();
 }
 
+export const alreadyPlayedMessage = "That one just played. Pick another.";
+
 export function toggleVote(input: {
   sessionId: string;
   trackId: string;
@@ -462,8 +464,10 @@ export function toggleVote(input: {
       if (!session) return null;
 
       const track = database
-        .prepare("SELECT id FROM tracks WHERE id = ? AND session_id = ?")
-        .get(input.trackId, session.id) as { id: string } | undefined;
+        .prepare("SELECT id, played_at FROM tracks WHERE id = ? AND session_id = ?")
+        .get(input.trackId, session.id) as
+        | { id: string; played_at: string | null }
+        | undefined;
       if (!track) return null;
 
       const existingVote = database
@@ -471,6 +475,11 @@ export function toggleVote(input: {
         .get(track.id, input.accountId);
       const voted = input.enabled ?? !existingVote;
       const changed = voted !== Boolean(existingVote);
+      // A played song has left the ballot. Taking a vote back off it is still
+      // allowed; a guest whose poll has not caught up must not spend one on it.
+      if (voted && changed && track.played_at) {
+        throw new Error(alreadyPlayedMessage);
+      }
       if (voted && changed) {
         database
           .prepare(
@@ -516,9 +525,13 @@ export function castAnonymousVote(input: {
       if (!session) return { status: "not_found" as const };
 
       const track = database
-        .prepare("SELECT id FROM tracks WHERE id = ? AND session_id = ?")
-        .get(input.trackId, session.id) as { id: string } | undefined;
+        .prepare("SELECT id, played_at FROM tracks WHERE id = ? AND session_id = ?")
+        .get(input.trackId, session.id) as
+        | { id: string; played_at: string | null }
+        | undefined;
       if (!track) return { status: "not_found" as const };
+      // The one free vote must not land on a song that has already played.
+      if (track.played_at) return { status: "already_played" as const };
 
       const claimed = database
         .prepare("SELECT 1 FROM voter_accounts WHERE voter_id = ?")

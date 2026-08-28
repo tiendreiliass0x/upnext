@@ -242,46 +242,75 @@ function formatClock(seconds: number) {
  * follows automatically. A late joiner starts partway through, offset by how
  * long the DJ has had it on, so the phone roughly tracks the room.
  */
-export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying }) {
+/**
+ * Stays mounted for the life of the guest view, even while nothing is on:
+ * the first tap "unlocks" this one <audio> element for unprompted playback,
+ * and unmounting it would make every guest tap again for the next song.
+ */
+export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Which song this element was last started for, so the effect below does
+  // not restart what the tap handler already started synchronously.
+  const startedKeyRef = useRef("");
   const [listening, setListening] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [failed, setFailed] = useState(false);
-  const { trackId, previewUrl, startedAt } = nowPlaying;
+  const [status, setStatus] = useState<"" | "failed" | "finished">("");
+  const trackId = nowPlaying?.trackId ?? "";
+  const previewUrl = nowPlaying?.previewUrl ?? null;
+  const startedAt = nowPlaying?.startedAt ?? "";
+  const songKey = `${trackId}|${startedAt}`;
 
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
+  function silence(audio: HTMLAudioElement) {
+    audio.onloadedmetadata = null;
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+    startedKeyRef.current = "";
+    setIsPlaying(false);
+  }
+
+  // Start the DJ's song from roughly where the room is. Called straight from
+  // the tap handler the first time, because WebKit only honours play() while
+  // it is still inside the user gesture; an effect runs too late for that.
+  function start(audio: HTMLAudioElement, url: string, since: string) {
+    const offset = Math.max(0, (Date.now() - Date.parse(since)) / 1000);
+    startedKeyRef.current = songKey;
     setPosition(0);
     setDuration(0);
-    setFailed(false);
-    if (!listening || !previewUrl) {
-      audio.pause();
-      audio.removeAttribute("src");
-      audio.load();
-      setIsPlaying(false);
-      return;
-    }
-    let cancelled = false;
-    const offset = Math.max(0, (Date.now() - Date.parse(startedAt)) / 1000);
-    audio.src = previewUrl;
+    setStatus("");
+    audio.src = url;
     audio.onloadedmetadata = () => {
-      if (cancelled) return;
-      if (Number.isFinite(audio.duration) && offset < audio.duration) {
+      if (!Number.isFinite(audio.duration)) return;
+      if (offset < audio.duration) {
         audio.currentTime = offset;
+        return;
       }
+      // The room is past the end of this one. Playing it from the top would
+      // be a different song from what the room hears, so say so instead.
+      silence(audio);
+      setStatus("finished");
     };
     claimAudio(audio);
     audio.play().catch(() => {
-      if (!cancelled) setFailed(true);
+      if (startedKeyRef.current === songKey) setStatus("failed");
     });
-    return () => {
-      cancelled = true;
-      audio.onloadedmetadata = null;
-    };
-  }, [listening, previewUrl, startedAt, trackId]);
+  }
+
+  // Follow later changes of song automatically once the guest has tapped.
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !listening) return;
+    if (!previewUrl) {
+      if (startedKeyRef.current) silence(audio);
+      setStatus("");
+      return;
+    }
+    if (startedKeyRef.current === songKey) return;
+    start(audio, previewUrl, startedAt);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- start/silence are stable per render and keyed by songKey
+  }, [listening, previewUrl, startedAt, songKey]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -291,21 +320,27 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying }) {
   }, []);
 
   return (
-    <div className="player-dock now-playing-dock" role="region" aria-label="Now playing">
+    <div
+      className="player-dock now-playing-dock"
+      role="region"
+      aria-label="Now playing"
+      hidden={!nowPlaying}
+    >
       <div className="player-dock-inner">
         <button
           type="button"
           className="player-main-button"
           aria-label={isPlaying ? "Pause the DJ's song" : "Listen along"}
-          disabled={!previewUrl}
+          disabled={!previewUrl || status === "finished"}
           onClick={() => {
             const audio = audioRef.current;
-            if (!audio) return;
+            if (!audio || !previewUrl) return;
             if (!listening) {
+              start(audio, previewUrl, startedAt);
               setListening(true);
             } else if (audio.paused) {
               claimAudio(audio);
-              audio.play().catch(() => setFailed(true));
+              audio.play().catch(() => setStatus("failed"));
             } else {
               audio.pause();
             }
@@ -315,10 +350,16 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying }) {
         </button>
         <span className="track-copy player-now">
           <small className="now-playing-label">DJ is playing</small>
-          <strong>{nowPlaying.title}</strong>
+          <strong>{nowPlaying?.title ?? ""}</strong>
           <small>
-            {nowPlaying.artist}
-            {!previewUrl ? " · no audio for this one" : failed ? " · could not play" : ""}
+            {nowPlaying?.artist ?? ""}
+            {!previewUrl
+              ? " · no audio for this one"
+              : status === "failed"
+                ? " · could not play"
+                : status === "finished"
+                  ? " · this one's finished"
+                  : ""}
           </small>
         </span>
         {listening && previewUrl && (
@@ -346,7 +387,7 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying }) {
             const value = event.currentTarget.duration;
             setDuration(Number.isFinite(value) ? value : 0);
           }}
-          onError={() => setFailed(true)}
+          onError={() => setStatus("failed")}
         />
       </div>
     </div>
@@ -1167,10 +1208,10 @@ export default function Dashboard({
           body: JSON.stringify({ trackId }),
         },
       );
-      const data = (await response.json()) as {
+      const data = await readJson<{
         session?: PublicSession | null;
         error?: string;
-      };
+      }>(response);
       if (!response.ok || !data.session) {
         throw new Error(data.error || "The song could not be changed.");
       }
@@ -2143,7 +2184,7 @@ function GuestRoom({
           ? "One free vote per room. Add your phone to keep voting."
           : "Tap once per track. The most-voted track stays on top."}
       </p>
-      {session.nowPlaying && <NowPlayingDock nowPlaying={session.nowPlaying} />}
+      <NowPlayingDock nowPlaying={session.nowPlaying} />
     </main>
   );
 }
@@ -2204,6 +2245,11 @@ export function QueueList({
         setLoadingTrackId("");
         setPlayingTrackId("");
       }
+    };
+    // The DJ's dock can pause this one when it takes over; the row must not
+    // keep showing Stop for something that is no longer playing.
+    audio.onpause = () => {
+      if (audioRef.current === audio) setPlayingTrackId("");
     };
 
     try {

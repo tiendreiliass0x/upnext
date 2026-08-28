@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Dashboard, {
   IdentityGate,
   LibraryPicker,
+  NowPlayingDock,
   QueueList,
 } from "@/components/Dashboard";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
@@ -753,5 +754,104 @@ describe("now playing", () => {
     expect(change?.init?.method).toBe("POST");
     expect((change?.init?.headers as Record<string, string>)["x-upnext-host-key"]).toBe("host-key");
     expect(JSON.parse(String(change?.init?.body))).toEqual({ trackId: "next" });
+  });
+});
+
+describe("the listen-along dock", () => {
+  const song = (trackId: string, title: string, secondsAgo = 20) => ({
+    trackId,
+    title,
+    artist: "Artist",
+    previewUrl: `/api/tracks/${trackId}/preview`,
+    startedAt: new Date(Date.now() - secondsAgo * 1000).toISOString(),
+  });
+
+  function stubMedia() {
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockResolvedValue(undefined);
+    const pause = vi
+      .spyOn(HTMLMediaElement.prototype, "pause")
+      .mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    return { play, pause };
+  }
+
+  it("starts playback inside the first tap, not in a later effect", async () => {
+    const { play } = stubMedia();
+    render(<NowPlayingDock nowPlaying={song("t1", "Opener")} />);
+
+    // fireEvent runs the handler synchronously; a play() that only happened in
+    // an effect would still be called here, so also check it saw the src the
+    // handler set, which the effect path would only set afterwards.
+    const button = screen.getByRole("button", { name: "Listen along" });
+    const audio = document.querySelector("audio");
+    if (!audio) throw new Error("no audio element");
+    fireEvent.click(button);
+
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(audio.src).toContain("/api/tracks/t1/preview");
+  });
+
+  it("stays unlocked across a song being taken off, so the next one follows without a tap", async () => {
+    const { play } = stubMedia();
+    const { rerender } = render(<NowPlayingDock nowPlaying={song("t1", "Opener")} />);
+    const dock = screen.getByRole("region", { name: "Now playing" });
+    fireEvent.click(within(dock).getByRole("button", { name: "Listen along" }));
+    expect(play).toHaveBeenCalledTimes(1);
+
+    rerender(<NowPlayingDock nowPlaying={null} />);
+    expect(dock).not.toBeVisible();
+
+    rerender(<NowPlayingDock nowPlaying={song("t2", "Banger")} />);
+    expect(dock).toBeVisible();
+    expect(within(dock).getByText("Banger")).toBeInTheDocument();
+    // No second tap needed.
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(document.querySelector("audio")?.src).toContain("/api/tracks/t2/preview");
+  });
+
+  it("does not play a song the room has already finished", () => {
+    const { pause } = stubMedia();
+    // The DJ put a three-minute song on ten minutes ago.
+    render(<NowPlayingDock nowPlaying={song("t1", "Opener", 600)} />);
+    const audio = document.querySelector("audio");
+    if (!audio) throw new Error("no audio element");
+    Object.defineProperty(audio, "duration", { configurable: true, value: 180 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Listen along" }));
+    fireEvent(audio, new Event("loadedmetadata"));
+
+    expect(pause).toHaveBeenCalled();
+    expect(screen.getByText(/this one's finished/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Listen along" })).toBeDisabled();
+  });
+
+  it("clears a queue row's Stop state when another player takes the audio over", async () => {
+    stubMedia();
+    const created: HTMLAudioElement[] = [];
+    vi.stubGlobal(
+      "Audio",
+      function FakeAudio(this: unknown, src?: string) {
+        const element = document.createElement("audio");
+        if (src) element.src = src;
+        created.push(element);
+        return element;
+      },
+    );
+    const user = userEvent.setup();
+    render(<QueueList tracks={tracks} />);
+
+    await user.click(screen.getByRole("button", { name: /^play first track$/i }));
+    const button = screen.getByRole("button", { name: /^stop first track$/i });
+    expect(button).toHaveAttribute("aria-pressed", "true");
+
+    // The listen-along dock claims audio and pauses this element.
+    fireEvent(created[0], new Event("pause"));
+
+    expect(screen.getByRole("button", { name: /^play first track$/i })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 });

@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { getAccountFromRequest } from "@/lib/auth";
-import { castAnonymousVote, toggleVote } from "@/lib/sessions";
+import {
+  alreadyPlayedMessage,
+  castAnonymousVote,
+  toggleVote,
+} from "@/lib/sessions";
 import { getAnonymousVoterId } from "@/lib/voters";
 
 export const dynamic = "force-dynamic";
@@ -57,6 +61,13 @@ export async function POST(
           voterId: anonymousVoterId as string,
         });
 
+    if (result && "status" in result && result.status === "already_played") {
+      return NextResponse.json(
+        { error: alreadyPlayedMessage, code: "ALREADY_PLAYED" },
+        { status: 409 },
+      );
+    }
+
     if (result && "status" in result && result.status === "phone_required") {
       return NextResponse.json(
         {
@@ -78,7 +89,13 @@ export async function POST(
       return NextResponse.json({ session: result.session, voted: result.voted });
     }
     return NextResponse.json(result);
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && error.message === alreadyPlayedMessage) {
+      return NextResponse.json(
+        { error: alreadyPlayedMessage, code: "ALREADY_PLAYED" },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: "The vote could not be saved." },
       { status: 500 },

@@ -156,7 +156,11 @@ Browsers refuse unprompted audio, so the first song needs a tap; after that a
 change of song follows automatically. A late joiner starts partway through,
 offset by how long the DJ has had the song on, so a phone roughly tracks the
 room rather than restarting from the top. This is phone playback of the same
-file, not a synced broadcast — expect drift of a second or two.
+file, not a synced broadcast — expect drift of a second or two. A joiner who
+arrives after the song has run out is told it has finished rather than hearing
+it restart, and the dock stays unlocked while the DJ has nothing on, so the
+next song still follows without another tap. The server refuses a new vote on
+a played track (409), since a guest's ballot can be up to one poll behind.
 
 ## Voting Identity
 
