@@ -269,6 +269,53 @@ describe("cleanup", () => {
     expect(count("audio_uploads")).toBe(1);
   });
 
+  it("never reclaims a preview a library still points at", async () => {
+    // The regression this guards: catalogue entries have no tracks row until a
+    // DJ uses one, so the orphan sweep would have deleted every library preview
+    // a day after it was uploaded, quietly emptying the catalogue.
+    getDatabase()
+      .prepare(
+        "INSERT INTO libraries (id, name, description, created_at, updated_at) VALUES ('lib','L','',?,?)",
+      )
+      .run(ago(200), ago(200));
+    seedUpload("previews/host/catalogue.mp3", ago(96));
+    getDatabase()
+      .prepare(
+        `INSERT INTO library_tracks
+          (id, library_id, title, artist, preview_key, contributed_by, created_at)
+         VALUES ('lt1','lib','Song','Artist','previews/host/catalogue.mp3','host',?)`,
+      )
+      .run(ago(96));
+
+    const summary = await runCleanup({ now });
+
+    expect(summary).toMatchObject({ deletedObjects: 0, deletedUploadRecords: 0 });
+    expect(storageMocks.deletePreviews).not.toHaveBeenCalled();
+    expect(count("audio_uploads")).toBe(1);
+  });
+
+  it("reclaims the preview once the library entry is gone", async () => {
+    getDatabase()
+      .prepare(
+        "INSERT INTO libraries (id, name, description, created_at, updated_at) VALUES ('lib2','L','',?,?)",
+      )
+      .run(ago(200), ago(200));
+    seedUpload("previews/host/dropped.mp3", ago(96));
+    getDatabase()
+      .prepare(
+        `INSERT INTO library_tracks
+          (id, library_id, title, artist, preview_key, contributed_by, created_at)
+         VALUES ('lt2','lib2','Song','Artist','previews/host/dropped.mp3','host',?)`,
+      )
+      .run(ago(96));
+    getDatabase().prepare("DELETE FROM library_tracks WHERE id = 'lt2'").run();
+
+    const summary = await runCleanup({ now });
+
+    expect(summary).toMatchObject({ deletedObjects: 1, deletedUploadRecords: 1 });
+    expect(count("audio_uploads")).toBe(0);
+  });
+
   it("prunes stale account creation requests", async () => {
     getDatabase()
       .prepare(

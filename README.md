@@ -35,6 +35,27 @@ refuses to load, so Next.js, Vitest and the cleanup script all execute under
 Node. `bun run <script>` is the right way to invoke them — it resolves the
 binary and spawns it under Node.
 
+## Song Libraries
+
+Set `ADMIN_TOKEN` and visit `/admin` to create named libraries and upload songs
+into them. Each upload runs through the same FFmpeg and R2 pipeline as a DJ's
+own files, so catalogue songs carry real 30-second previews.
+
+In the DJ booth, a picker above the upload zone lets a DJ choose a library,
+search it, and tick songs into the queue. A catalogue song is never re-uploaded:
+it already has a preview, and the room reuses that object. DJs can also add
+songs they have uploaded, so the catalogue grows from use; removal is
+admin-only, which is the moderation lever.
+
+`ADMIN_TOKEN` is separate from the phone login on purpose. Phone login is
+unverified, so anyone who knows a registered number holds that account —
+hanging the catalogue off it would make the most privileged surface the easiest
+to take over. Unset, `/admin` reports itself as absent rather than as forbidden.
+
+Cleanup treats a library entry as a claim on its preview, so catalogue audio
+outlives the rooms that used it. Deleting the entry releases the claim, and the
+next run reclaims the object.
+
 ## Voting Identity
 
 QR guests receive a browser voter ID in local storage and can cast one free

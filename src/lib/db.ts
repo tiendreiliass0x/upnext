@@ -63,6 +63,24 @@ export function getDatabase() {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS libraries (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS library_tracks (
+      id TEXT PRIMARY KEY,
+      library_id TEXT NOT NULL REFERENCES libraries(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      artist TEXT NOT NULL,
+      preview_key TEXT REFERENCES audio_uploads(object_key),
+      contributed_by TEXT REFERENCES accounts(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS tracks (
       id TEXT PRIMARY KEY,
       session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -96,6 +114,14 @@ export function getDatabase() {
     -- audio_uploads foreign key as cleanup removes retired previews.
     CREATE INDEX IF NOT EXISTS tracks_preview_key_idx
       ON tracks(preview_key);
+    CREATE INDEX IF NOT EXISTS library_tracks_library_idx
+      ON library_tracks(library_id, title);
+    -- Plain, like tracks_preview_key_idx: cleanup asks whether a library still
+    -- points at an upload, and SQLite needs a full index for the foreign key.
+    CREATE INDEX IF NOT EXISTS library_tracks_preview_idx
+      ON library_tracks(preview_key);
+    CREATE INDEX IF NOT EXISTS library_tracks_contributor_idx
+      ON library_tracks(contributed_by);
     CREATE INDEX IF NOT EXISTS votes_session_idx
       ON votes(session_id);
     CREATE INDEX IF NOT EXISTS anonymous_votes_track_idx

@@ -100,8 +100,13 @@ export async function runCleanup(options: { now?: Date } = {}) {
     })
     .immediate();
 
-  // Anything no track points at any more, past the grace period that covers a
+  // Anything nothing points at any more, past the grace period that covers a
   // DJ who uploaded previews and has not opened the room yet.
+  //
+  // A library track is a second, longer-lived claim on an upload. Rooms come
+  // and go; a catalogue entry is meant to outlive every room that used it, so
+  // it has to be checked here or the catalogue would erase itself a day after
+  // being filled.
   const retiredUploads = (
     database
       .prepare(
@@ -109,6 +114,10 @@ export async function runCleanup(options: { now?: Date } = {}) {
          WHERE created_at <= @uploadCutoff
            AND NOT EXISTS (
              SELECT 1 FROM tracks WHERE preview_key = audio_uploads.object_key
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM library_tracks
+             WHERE preview_key = audio_uploads.object_key
            )`,
       )
       .all({ uploadCutoff }) as Array<{ object_key: string }>

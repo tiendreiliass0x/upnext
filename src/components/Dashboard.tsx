@@ -25,6 +25,7 @@ import {
 import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
+import type { Library, LibraryTrack } from "@/lib/libraries";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
 type AppView = "dj" | "guest";
@@ -38,7 +39,7 @@ type DraftTrack = {
   id: string;
   title: string;
   artist: string;
-  source: "demo" | "upload" | "playlist";
+  source: "demo" | "upload" | "playlist" | "library";
   file?: File;
   previewKey?: string;
 };
@@ -666,6 +667,33 @@ export default function Dashboard({
     setError("");
   }
 
+  function addLibraryTracks(picked: LibraryTrack[]) {
+    if (setupLockedRef.current || picked.length === 0) return;
+    setDraftTracks((current) => {
+      const base = current.every((track) => track.source === "demo") ? [] : current;
+      // A catalogue song already has its preview, so the same song twice would
+      // upload nothing but would still queue twice.
+      const known = new Set(
+        base.map((track) => track.previewKey ?? `${track.artist}-${track.title}`.toLowerCase()),
+      );
+      const additions: DraftTrack[] = [];
+      for (const track of picked) {
+        const key = track.id;
+        if (known.has(key)) continue;
+        known.add(key);
+        additions.push({
+          id: track.id,
+          title: track.title,
+          artist: track.artist,
+          source: "library",
+          previewKey: track.libraryPreviewKey ?? undefined,
+        });
+      }
+      return [...base, ...additions].slice(0, 200);
+    });
+    setError("");
+  }
+
   async function startSession() {
     if (setupLockedRef.current) return;
     if (!accountToken) {
@@ -1083,6 +1111,8 @@ export default function Dashboard({
           }
           onClear={() => !isStarting && setDraftTracks([])}
           onRestoreDemo={() => !isStarting && setDraftTracks(demoTracks)}
+          accountToken={accountToken}
+          onAddLibraryTracks={addLibraryTracks}
           onStart={startSession}
           />
         )
@@ -1139,6 +1169,186 @@ export default function Dashboard({
   );
 }
 
+export function LibraryPicker({
+  accountToken,
+  disabled = false,
+  onAdd,
+}: {
+  accountToken: string;
+  disabled?: boolean;
+  onAdd: (tracks: LibraryTrack[]) => void;
+}) {
+  const [libraries, setLibraries] = useState<Library[] | null>(null);
+  const [libraryId, setLibraryId] = useState("");
+  const [tracks, setTracks] = useState<LibraryTrack[]>([]);
+  const [query, setQuery] = useState("");
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [isLoading, setIsLoading] = useState(false);
+  const [pickerError, setPickerError] = useState("");
+
+  useEffect(() => {
+    if (!accountToken) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetchWithTimeout("/api/libraries", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accountToken}` },
+        });
+        const data = (await response.json()) as {
+          libraries?: Library[];
+          error?: string;
+        };
+        if (!response.ok || !data.libraries) throw new Error(data.error || "");
+        if (cancelled) return;
+        setLibraries(data.libraries);
+        setLibraryId((current) => current || data.libraries?.[0]?.id || "");
+      } catch {
+        if (!cancelled) setLibraries([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [accountToken]);
+
+  useEffect(() => {
+    if (!accountToken || !libraryId) {
+      setTracks([]);
+      return;
+    }
+    let cancelled = false;
+    // Debounced so a typed search does not fire a request per keystroke.
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setIsLoading(true);
+        try {
+          const response = await fetchWithTimeout(
+            `/api/libraries/${encodeURIComponent(libraryId)}/tracks?q=${encodeURIComponent(query)}`,
+            {
+              cache: "no-store",
+              headers: { Authorization: `Bearer ${accountToken}` },
+            },
+          );
+          const data = (await response.json()) as {
+            tracks?: LibraryTrack[];
+            error?: string;
+          };
+          if (!response.ok || !data.tracks) {
+            throw new Error(data.error || "The library could not be read.");
+          }
+          if (!cancelled) {
+            setTracks(data.tracks);
+            setPickerError("");
+          }
+        } catch (error) {
+          if (!cancelled) setPickerError(getErrorMessage(error));
+        } finally {
+          if (!cancelled) setIsLoading(false);
+        }
+      })();
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [accountToken, libraryId, query]);
+
+  // Nothing to show before the catalogue has any libraries in it.
+  if (!accountToken || libraries === null || libraries.length === 0) return null;
+
+  const selected = tracks.filter((track) => picked.has(track.id));
+
+  return (
+    <div className="library-picker">
+      <div className="library-picker-head">
+        <span className="eyebrow">
+          <ListMusic size={14} /> Pick from a library
+        </span>
+        <select
+          aria-label="Choose a library"
+          value={libraryId}
+          disabled={disabled}
+          onChange={(event) => {
+            setLibraryId(event.target.value);
+            setPicked(new Set());
+          }}
+        >
+          {libraries.map((library) => (
+            <option key={library.id} value={library.id}>
+              {library.name} ({library.trackCount})
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <input
+        type="search"
+        className="library-search"
+        placeholder="Search title or artist"
+        aria-label="Search this library"
+        value={query}
+        disabled={disabled}
+        onChange={(event) => setQuery(event.target.value)}
+      />
+
+      {pickerError && <p className="form-error" role="alert">{pickerError}</p>}
+
+      {isLoading && tracks.length === 0 ? (
+        <p className="library-empty">Loading songs...</p>
+      ) : tracks.length === 0 ? (
+        <p className="library-empty">
+          {query ? "No songs match that search." : "This library is empty."}
+        </p>
+      ) : (
+        <ul className="library-list">
+          {tracks.map((track) => (
+            <li key={track.id}>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={picked.has(track.id)}
+                  disabled={disabled}
+                  onChange={() =>
+                    setPicked((current) => {
+                      const next = new Set(current);
+                      if (next.has(track.id)) next.delete(track.id);
+                      else next.add(track.id);
+                      return next;
+                    })
+                  }
+                />
+                <span className="track-copy">
+                  <strong>{track.title}</strong>
+                  <small>
+                    {track.artist}
+                    {track.previewUrl ? " · 30 sec" : " · no preview"}
+                  </small>
+                </span>
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <button
+        type="button"
+        className="secondary-button"
+        disabled={disabled || selected.length === 0}
+        onClick={() => {
+          onAdd(selected);
+          setPicked(new Set());
+        }}
+      >
+        <Plus size={16} />
+        {selected.length === 0
+          ? "Select songs to add"
+          : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
+      </button>
+    </div>
+  );
+}
+
 type DJSetupProps = {
   sessionName: string;
   venue: string;
@@ -1153,6 +1363,8 @@ type DJSetupProps = {
   onRemoveTrack: (trackId: string) => void;
   onClear: () => void;
   onRestoreDemo: () => void;
+  accountToken: string;
+  onAddLibraryTracks: (tracks: LibraryTrack[]) => void;
   onStart: () => void;
 };
 
@@ -1170,6 +1382,8 @@ function DJSetup({
   onRemoveTrack,
   onClear,
   onRestoreDemo,
+  accountToken,
+  onAddLibraryTracks,
   onStart,
 }: DJSetupProps) {
   return (
@@ -1243,6 +1457,12 @@ function DJSetup({
                   </button>
                 )}
               </div>
+
+              <LibraryPicker
+                accountToken={accountToken}
+                disabled={isStarting}
+                onAdd={onAddLibraryTracks}
+              />
 
               <label
                 className={`upload-zone ${isDragging ? "is-dragging" : ""} ${isStarting ? "is-disabled" : ""}`}

@@ -5,6 +5,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Dashboard, {
   IdentityGate,
+  LibraryPicker,
   QueueList,
 } from "@/components/Dashboard";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
@@ -376,6 +377,82 @@ describe("guest link reachability", () => {
     expect(document.querySelector(".qr-frame")).not.toBeNull();
     expect(screen.queryByText(/cannot reach any guest/i)).toBeNull();
     expect(screen.queryByText(/same-network link/i)).toBeNull();
+  });
+});
+
+describe("library picker", () => {
+  const library = { id: "lib-1", name: "Deep House", description: "", trackCount: 2, createdAt: "" };
+  const libraryTracks = [
+    {
+      id: "lt-1", libraryId: "lib-1", title: "Sunrise", artist: "Kora",
+      previewUrl: "/api/library-tracks/lt-1/preview",
+      libraryPreviewKey: "previews/curator/sunrise.mp3",
+      contributedBy: null, createdAt: "",
+    },
+    {
+      id: "lt-2", libraryId: "lib-1", title: "Moonfall", artist: "Vega",
+      previewUrl: null, libraryPreviewKey: null,
+      contributedBy: null, createdAt: "",
+    },
+  ];
+
+  function mockApi(libs = [library], tracks = libraryTracks) {
+    const calls: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url === "/api/libraries") return Response.json({ libraries: libs });
+      if (url.includes("/tracks")) return Response.json({ tracks });
+      return Response.json({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return calls;
+  }
+
+  it("stays out of the way when no libraries exist", async () => {
+    mockApi([]);
+    const { container } = render(
+      <LibraryPicker accountToken="t" onAdd={() => {}} />,
+    );
+    await waitFor(() => expect(fetch).toHaveBeenCalled());
+    expect(container.querySelector(".library-picker")).toBeNull();
+  });
+
+  it("hands back the preview key so the song is never re-uploaded", async () => {
+    const user = userEvent.setup();
+    mockApi();
+    const onAdd = vi.fn();
+    render(<LibraryPicker accountToken="t" onAdd={onAdd} />);
+
+    await user.click(await screen.findByRole("checkbox", { name: /sunrise/i }));
+    await user.click(screen.getByRole("button", { name: /add 1 song/i }));
+
+    expect(onAdd).toHaveBeenCalledTimes(1);
+    const picked = onAdd.mock.calls[0][0];
+    expect(picked).toHaveLength(1);
+    // Without this the DJ would upload a file they never chose.
+    expect(picked[0].libraryPreviewKey).toBe("previews/curator/sunrise.mp3");
+  });
+
+  it("marks a catalogue entry that has no preview", async () => {
+    mockApi();
+    render(<LibraryPicker accountToken="t" onAdd={() => {}} />);
+    expect(await screen.findByText(/no preview/i)).toBeInTheDocument();
+  });
+
+  it("sends the search to the server rather than filtering locally", async () => {
+    const user = userEvent.setup();
+    const calls = mockApi();
+    render(<LibraryPicker accountToken="t" onAdd={() => {}} />);
+    await screen.findByRole("checkbox", { name: /sunrise/i });
+
+    await user.type(screen.getByLabelText(/search this library/i), "moon");
+
+    // Server-side search is what keeps a large catalogue usable.
+    await waitFor(
+      () => expect(calls.some((c) => c.includes("q=moon"))).toBe(true),
+      { timeout: 3000 },
+    );
   });
 });
 

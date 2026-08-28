@@ -196,8 +196,18 @@ export function createSession(input: {
         expiresAt,
       );
 
-    const ownsUpload = database.prepare(
-      "SELECT 1 FROM audio_uploads WHERE object_key = ? AND account_id = ?",
+    // Either the caller uploaded it, or a library offers it to everyone.
+    // Without the second clause a DJ picking a catalogue song would silently
+    // get a track with no audio, since an unusable key is stored as NULL.
+    const canUseUpload = database.prepare(
+      `SELECT 1 FROM audio_uploads u
+       WHERE u.object_key = ?
+         AND (
+           u.account_id = ?
+           OR EXISTS (
+             SELECT 1 FROM library_tracks WHERE preview_key = u.object_key
+           )
+         )`,
     );
     const insertTrack = database.prepare(
       `INSERT INTO tracks
@@ -207,7 +217,7 @@ export function createSession(input: {
 
     input.tracks.forEach((track, position) => {
       const previewKey =
-        track.previewKey && ownsUpload.get(track.previewKey, input.accountId)
+        track.previewKey && canUseUpload.get(track.previewKey, input.accountId)
           ? track.previewKey
           : null;
       insertTrack.run(
