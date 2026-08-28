@@ -308,6 +308,77 @@ describe("conditional room polling", () => {
   });
 });
 
+describe("guest link reachability", () => {
+  const hostRoom: PublicSession = {
+    id: "ABC123",
+    name: "Host Room",
+    venue: "Test Venue",
+    createdAt: "2026-08-26T00:00:00.000Z",
+    revision: 0,
+    totalVotes: 0,
+    guestCount: 0,
+    votedTrackIds: [],
+    anonymousVoteUsed: false,
+    tracks,
+  };
+
+  function mountHost(guestBaseUrl: string | null) {
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === "/api/accounts") {
+        return Response.json({
+          account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" },
+        });
+      }
+      if (url === "/api/sessions") {
+        return Response.json({
+          activeRoom: { session: hostRoom, hostKey: "host-key" },
+          guestBaseUrl,
+        });
+      }
+      return Response.json({ session: hostRoom });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard />);
+  }
+
+  it("refuses to show a QR code for a loopback address", async () => {
+    // jsdom serves the page from localhost, so with nothing configured the
+    // derived link is one no guest could ever load.
+    mountHost(null);
+
+    expect(
+      await screen.findByText(/cannot reach any guest/i),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/APP_PUBLIC_URL/);
+    expect(document.querySelector(".qr-frame")).toBeNull();
+  });
+
+  it("shows the QR for a LAN address but warns about mobile data", async () => {
+    mountHost("http://10.0.0.117:3000");
+
+    expect(await screen.findByText(/same-network link/i)).toBeInTheDocument();
+    expect(screen.getByText(/guests on mobile data cannot open it/i)).toBeInTheDocument();
+    // Still usable at a venue where everyone joins the house wifi.
+    expect(document.querySelector(".qr-frame")).not.toBeNull();
+    expect(
+      screen.getByLabelText("Guest room link"),
+    ).toHaveValue("http://10.0.0.117:3000/?session=ABC123");
+  });
+
+  it("says nothing when the configured URL is publicly reachable", async () => {
+    mountHost("https://upnext.example.com");
+
+    expect(
+      await screen.findByLabelText("Guest room link"),
+    ).toHaveValue("https://upnext.example.com/?session=ABC123");
+    expect(document.querySelector(".qr-frame")).not.toBeNull();
+    expect(screen.queryByText(/cannot reach any guest/i)).toBeNull();
+    expect(screen.queryByText(/same-network link/i)).toBeNull();
+  });
+});
+
 describe("queue interactions", () => {
   it("plays one preview at a time and ignores stale media events", async () => {
     const user = userEvent.setup();

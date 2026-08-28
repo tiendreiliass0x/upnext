@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAccountFromRequest } from "@/lib/auth";
+import { getPublicBaseUrl } from "@/lib/config";
 import { createSession, getActiveHostSession } from "@/lib/sessions";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +11,10 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Sign in to continue." }, { status: 401 });
   }
 
-  return NextResponse.json({ activeRoom: getActiveHostSession(account.id) });
+  return NextResponse.json({
+    activeRoom: getActiveHostSession(account.id),
+    guestBaseUrl: getPublicBaseUrl(),
+  });
 }
 
 export async function POST(request: Request) {
@@ -74,7 +78,10 @@ export async function POST(request: Request) {
       tracks,
     });
 
-    return NextResponse.json(result, { status: 201 });
+    return NextResponse.json(
+      { ...result, guestBaseUrl: getPublicBaseUrl() },
+      { status: 201 },
+    );
   } catch {
     return NextResponse.json(
       { error: "The session could not be created." },

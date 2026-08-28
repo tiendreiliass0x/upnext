@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   GET as getAccount,
   POST as saveAccount,
@@ -61,6 +61,60 @@ async function register(phone: string, pseudonym: string) {
 function context(id: string) {
   return { params: Promise.resolve({ id }) };
 }
+
+describe("guest base URL", () => {
+  const original = process.env.APP_PUBLIC_URL;
+  afterEach(() => {
+    if (original === undefined) delete process.env.APP_PUBLIC_URL;
+    else process.env.APP_PUBLIC_URL = original;
+  });
+
+  async function hostAndRoom(configured: string | undefined) {
+    if (configured === undefined) delete process.env.APP_PUBLIC_URL;
+    else process.env.APP_PUBLIC_URL = configured;
+    const host = await register("+32470000601", "Base Host");
+    const created = await createRoom(
+      request("http://localhost/api/sessions", {
+        method: "POST",
+        token: host.token,
+        body: {
+          name: "Base Room",
+          venue: "V",
+          tracks: [{ title: "A", artist: "x" }],
+        },
+      }),
+    );
+    return { host, created };
+  }
+
+  it("hands the configured URL to the host on create and on recovery", async () => {
+    const { host, created } = await hostAndRoom("https://upnext.example.com/");
+    expect(
+      (await body<{ guestBaseUrl: string | null }>(created)).guestBaseUrl,
+    ).toBe("https://upnext.example.com");
+
+    const active = await getActiveRoom(
+      request("http://localhost/api/sessions", { token: host.token }),
+    );
+    expect(
+      (await body<{ guestBaseUrl: string | null }>(active)).guestBaseUrl,
+    ).toBe("https://upnext.example.com");
+  });
+
+  it("reports null when unconfigured so the client can warn", async () => {
+    const { created } = await hostAndRoom(undefined);
+    expect(
+      (await body<{ guestBaseUrl: string | null }>(created)).guestBaseUrl,
+    ).toBeNull();
+  });
+
+  it("reports null for a misconfigured value rather than shipping it", async () => {
+    const { created } = await hostAndRoom("not-a-url");
+    expect(
+      (await body<{ guestBaseUrl: string | null }>(created)).guestBaseUrl,
+    ).toBeNull();
+  });
+});
 
 describe("room conditional requests", () => {
   async function openRoom() {

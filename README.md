@@ -19,6 +19,16 @@ previews, and vote the queue into order.
 SQLite defaults to `data/dj-booth.sqlite`. The directory and database are
 created automatically.
 
+Set `APP_PUBLIC_URL` to the address guests will use. Guest links and the QR
+code are built from it. Without it they fall back to whatever address the DJ
+opened the booth on, and that address is usually wrong for guests: a LAN IP
+resolves only on the venue's own wifi, so anyone on mobile data cannot load it,
+and `localhost` resolves to the guest's own phone, so every scan fails. The
+live room refuses to render a QR code for a loopback address and flags a
+same-network one rather than handing out a code that cannot work. To test from
+another network, run a tunnel (`cloudflared tunnel --url http://localhost:3000`)
+and set `APP_PUBLIC_URL` to the hostname it prints.
+
 bun is the package manager and `bun.lock` is the only lockfile. Node stays the
 runtime: `better-sqlite3` ships a Node-ABI native binding that bun's runtime
 refuses to load, so Next.js, Vitest and the cleanup script all execute under

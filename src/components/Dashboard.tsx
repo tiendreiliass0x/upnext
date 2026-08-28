@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
+import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
 type AppView = "dj" | "guest";
@@ -171,8 +172,16 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
 }
 
-function getGuestLink(sessionId: string) {
-  const url = new URL(window.location.href);
+function getGuestLink(sessionId: string, baseUrl?: string | null) {
+  // Fall back to the address the DJ is on only when nothing is configured.
+  // That address is often unreachable for guests, which is why the live room
+  // warns about what it is handing out.
+  let url: URL;
+  try {
+    url = new URL(baseUrl || window.location.href);
+  } catch {
+    url = new URL(window.location.href);
+  }
   url.search = "";
   url.hash = "";
   url.searchParams.set("session", sessionId);
@@ -225,6 +234,7 @@ export default function Dashboard({
   const [activeSessionId, setActiveSessionId] = useState(sharedSessionId);
   const [hostKey, setHostKey] = useState("");
   const [sessionLink, setSessionLink] = useState("");
+  const [guestBaseUrl, setGuestBaseUrl] = useState<string | null>(null);
   const [account, setAccount] = useState<PublicAccount | null>(null);
   const [accountToken, setAccountToken] = useState("");
   const [voterId, setVoterId] = useState("");
@@ -359,7 +369,9 @@ export default function Dashboard({
         });
         const data = (await response.json()) as {
           activeRoom?: { session: PublicSession; hostKey: string } | null;
+          guestBaseUrl?: string | null;
         };
+        if (!cancelled && data.guestBaseUrl) setGuestBaseUrl(data.guestBaseUrl);
         if (!response.ok || !data.activeRoom || cancelled) return;
 
         sessionRevisionRef.current = {
@@ -384,10 +396,19 @@ export default function Dashboard({
     };
   }, [accountToken, identityStatus, sharedSessionId]);
 
+  // Kept in an effect rather than derived during render: getGuestLink reads
+  // window.location, which does not exist while this component is server
+  // rendered.
+  useEffect(() => {
+    if (!activeSessionId) {
+      setSessionLink("");
+      return;
+    }
+    setSessionLink(getGuestLink(activeSessionId, guestBaseUrl));
+  }, [activeSessionId, guestBaseUrl]);
+
   useEffect(() => {
     if (!activeSessionId || identityStatus === "loading" || !voterId) return;
-
-    setSessionLink(getGuestLink(activeSessionId));
 
     let cancelled = false;
     let refreshTimer: number | undefined;
@@ -728,6 +749,7 @@ export default function Dashboard({
       const data = (await response.json()) as {
         session?: PublicSession;
         hostKey?: string;
+        guestBaseUrl?: string | null;
         error?: string;
       };
 
@@ -735,7 +757,7 @@ export default function Dashboard({
         throw new Error(data.error || "The room could not be opened.");
       }
 
-      const guestLink = getGuestLink(data.session.id);
+      if (data.guestBaseUrl) setGuestBaseUrl(data.guestBaseUrl);
       sessionRevisionRef.current = {
         id: data.session.id,
         revision: data.session.revision,
@@ -744,7 +766,6 @@ export default function Dashboard({
       sessionRequestIdRef.current = "";
       setActiveSessionId(data.session.id);
       setHostKey(data.hostKey);
-      setSessionLink(guestLink);
       setIsLive(true);
       setRoomMissing(false);
       setRoomError("");
@@ -1082,6 +1103,7 @@ export default function Dashboard({
           copied={copied}
           isLoading={isLoadingSession}
           isEnding={isEnding}
+          linkReach={sessionLink ? classifyGuestOrigin(sessionLink) : "unknown"}
           onCopy={copySessionLink}
           onOpenGuest={() => setView("guest")}
           onEnd={() => void endCurrentSession()}
@@ -1359,6 +1381,7 @@ type DJLiveRoomProps = {
   copied: boolean;
   isLoading: boolean;
   isEnding: boolean;
+  linkReach: GuestOriginReach;
   onCopy: () => void;
   onOpenGuest: () => void;
   onEnd: () => void;
@@ -1370,6 +1393,7 @@ function DJLiveRoom({
   copied,
   isLoading,
   isEnding,
+  linkReach,
   onCopy,
   onOpenGuest,
   onEnd,
@@ -1403,15 +1427,40 @@ function DJLiveRoom({
             <h2 id="share-title">Scan. Vote. Move the queue.</h2>
             <p>Put this QR on a screen or send the guest room link.</p>
           </div>
-          <div className="qr-frame">
-            <QRCode
-              value={sessionLink}
-              size={168}
-              bgColor="#ffffff"
-              fgColor="#161711"
-              level="M"
-            />
-          </div>
+          {linkReach === "loopback" ? (
+            // A loopback link resolves to the guest's own phone, so the code
+            // would fail for every single scan. Showing one would be worse
+            // than showing none.
+            <div className="link-warning is-blocking" role="alert">
+              <strong>This link cannot reach any guest.</strong>
+              <span>
+                The booth is open on a loopback address, which points at
+                whichever device scans it rather than at this server. Set
+                APP_PUBLIC_URL to the address guests will use, or reopen the
+                booth on that address.
+              </span>
+            </div>
+          ) : (
+            <div className="qr-frame">
+              <QRCode
+                value={sessionLink}
+                size={168}
+                bgColor="#ffffff"
+                fgColor="#161711"
+                level="M"
+              />
+            </div>
+          )}
+          {linkReach === "private" && (
+            <p className="link-warning" role="status">
+              <strong>Same-network link.</strong>
+              <span>
+                This address only resolves on your network, so guests on mobile
+                data cannot open it. Set APP_PUBLIC_URL for a link that works
+                anywhere.
+              </span>
+            </p>
+          )}
           <div className="room-code">
             <span>Room code</span>
             <strong>{session.id}</strong>

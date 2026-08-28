@@ -1481,3 +1481,37 @@ button:active:not(:disabled) {
 @keyframes preview-spin {
   to { transform: rotate(360deg); }
 }
+
+/* Guest-link reachability notices in the live room. A private LAN address is a
+   caution beside a usable QR code; a loopback address replaces it, because a
+   code that cannot work for anyone is worse than no code. */
+.link-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 13px 15px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--error) 32%, transparent);
+  background: color-mix(in srgb, var(--error) 7%, var(--surface));
+  font-size: 12.5px;
+  line-height: 1.45;
+  text-align: left;
+}
+
+.link-warning strong {
+  color: var(--error);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.link-warning span {
+  color: var(--muted-strong);
+}
+
+.link-warning.is-blocking {
+  min-height: 168px;
+  justify-content: center;
+  border-style: dashed;
+  border-width: 1.5px;
+}
