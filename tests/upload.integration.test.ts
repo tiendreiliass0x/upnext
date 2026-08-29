@@ -199,6 +199,24 @@ describe("preview API", () => {
     expect(offAir.status).toBe(404);
     expect(mediaMocks.getPreviewUrl).not.toHaveBeenCalled();
 
+    // The DJ pre-listens off air with the host key in a header, as JSON.
+    const audition = await getPreview(
+      new Request("http://localhost/?as=json", {
+        headers: { "x-upnext-host-key": created.hostKey },
+      }),
+      { params: Promise.resolve({ id: trackId }) },
+    );
+    expect(audition.status).toBe(200);
+    expect(audition.headers.get("cache-control")).toBe("no-store");
+    expect(await audition.json()).toEqual({ url: "https://signed.r2.example/preview.mp3" });
+    const wrongKey = await getPreview(
+      new Request("http://localhost/?as=json", {
+        headers: { "x-upnext-host-key": "not-the-key" },
+      }),
+      { params: Promise.resolve({ id: trackId }) },
+    );
+    expect(wrongKey.status).toBe(404);
+
     setNowPlaying({
       sessionId: created.session.id,
       hostKey: created.hostKey,

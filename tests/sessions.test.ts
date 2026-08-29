@@ -384,6 +384,14 @@ describe("sessions", () => {
     expect(otherRoom.session.tracks[0].previewUrl).toBeNull();
     // The room hears what is on air, nothing else: no key until the DJ plays it.
     expect(getTrackPreviewKey(ownerRoom.session.tracks[0].id)).toBeNull();
+    // The host may pre-listen to any row — with the right key only.
+    expect(
+      getTrackPreviewKey(ownerRoom.session.tracks[0].id, { hostKey: ownerRoom.hostKey }),
+    ).toBe("previews/owner/sample.mp3");
+    expect(
+      getTrackPreviewKey(ownerRoom.session.tracks[0].id, { hostKey: otherRoom.hostKey }),
+    ).toBeNull();
+    expect(getTrackPreviewKey(ownerRoom.session.tracks[0].id, { hostKey: "" })).toBeNull();
     setNowPlaying({
       sessionId: ownerRoom.session.id,
       hostKey: ownerRoom.hostKey,

@@ -713,21 +713,25 @@ export function getAudioUploadByRequest(accountId: string, requestId: string) {
 }
 
 /**
- * Audio for a room track is served only while the DJ has that track on: the
- * room listens to what is being broadcast, it does not browse the masters.
+ * Audio for a room track is served while the DJ has that track on — the room
+ * listens to what is being broadcast, it does not browse the masters — or to
+ * the host, proven by the room's host key, who may pre-listen to any row.
  * Anything else a guest could construct from the payload gets a 404.
  */
-export function getTrackPreviewKey(trackId: string) {
+export function getTrackPreviewKey(
+  trackId: string,
+  options: { hostKey?: string | null } = {},
+) {
   const row = getDatabase()
     .prepare(
       `SELECT t.preview_key
        FROM tracks t
        JOIN sessions s ON s.id = t.session_id
        WHERE t.id = ? AND t.preview_key IS NOT NULL
-         AND s.now_playing_track_id = t.id
+         AND (s.now_playing_track_id = t.id OR s.host_key = ?)
          AND s.ended_at IS NULL AND s.expires_at > ?`,
     )
-    .get(trackId, new Date().toISOString()) as
+    .get(trackId, options.hostKey || "", new Date().toISOString()) as
     | { preview_key: string }
     | undefined;
   return row?.preview_key ?? null;

@@ -447,6 +447,70 @@ describe("library picker", () => {
   });
 });
 
+describe("the DJ's pre-listen", () => {
+  class MockAudio {
+    static instances: MockAudio[] = [];
+    src = "";
+    preload = "";
+    onended: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onpause: (() => void) | null = null;
+    play = vi.fn().mockResolvedValue(undefined);
+    pause = vi.fn();
+    removeAttribute = vi.fn();
+    load = vi.fn();
+    constructor() {
+      MockAudio.instances.push(this);
+    }
+  }
+
+  beforeEach(() => {
+    MockAudio.instances = [];
+    vi.stubGlobal("Audio", MockAudio);
+  });
+
+  it("plays the resolved URL, one row at a time, and ignores stale media events", async () => {
+    const user = userEvent.setup();
+    const onAudition = vi.fn(async (track: SessionTrack) => `https://signed.example/${track.id}`);
+    const { unmount } = render(<QueueList tracks={tracks} onAudition={onAudition} />);
+    const firstButton = screen.getByRole("button", { name: /^play first track$/i });
+    const secondButton = screen.getByRole("button", { name: /^play second track$/i });
+
+    await user.click(firstButton);
+    await waitFor(() => expect(firstButton).toHaveAttribute("aria-pressed", "true"));
+    const firstAudio = MockAudio.instances[0];
+    expect(firstAudio.src).toBe("https://signed.example/track-one");
+    expect(onAudition).toHaveBeenCalledWith(tracks[0]);
+    const staleError = firstAudio.onerror;
+
+    await user.click(secondButton);
+    await waitFor(() => expect(secondButton).toHaveAttribute("aria-pressed", "true"));
+    expect(firstAudio.pause).toHaveBeenCalled();
+    staleError?.();
+    expect(secondButton).toHaveAttribute("aria-pressed", "true");
+
+    const secondAudio = MockAudio.instances[1];
+    unmount();
+    expect(secondAudio.pause).toHaveBeenCalled();
+    expect(secondAudio.removeAttribute).toHaveBeenCalledWith("src");
+  });
+
+  it("drops the Stop state when the URL cannot be resolved", async () => {
+    const user = userEvent.setup();
+    render(
+      <QueueList tracks={tracks} onAudition={async () => { throw new Error("nope"); }} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^play first track$/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^play first track$/i })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      ),
+    );
+    expect(MockAudio.instances[0].play).not.toHaveBeenCalled();
+  });
+});
+
 describe("queue interactions", () => {
   it("exposes vote count and selected state accessibly", async () => {
     const user = userEvent.setup();
