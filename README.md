@@ -29,9 +29,23 @@ opened the booth on, and that address is usually wrong for guests: a LAN IP
 resolves only on the venue's own wifi, so anyone on mobile data cannot load it,
 and `localhost` resolves to the guest's own phone, so every scan fails. The
 live room refuses to render a QR code for a loopback address and flags a
-same-network one rather than handing out a code that cannot work. To test from
-another network, run a tunnel (`cloudflared tunnel --url http://localhost:3000`)
-and set `APP_PUBLIC_URL` to the hostname it prints.
+same-network one rather than handing out a code that cannot work.
+
+### Reaching the dev server from another network
+
+`dev.younext.dev` is a named Cloudflare tunnel (`upnext-dev`) into the dev
+server on `:3000`. Its config and credentials live in `~/.cloudflared/` on the
+DJ's laptop, outside the repo, because the credentials file is a secret. It runs
+as a launchd service (`cloudflared service install`), so it is up whenever the
+laptop is; `cloudflared tunnel run upnext-dev` runs it in the foreground
+instead. Set `APP_PUBLIC_URL=https://dev.younext.dev` so guest links and the QR
+code point there. The hostname is listed in `allowedDevOrigins` in
+`next.config.ts` next to the LAN addresses, which is what lets hot reload work
+through the tunnel: Next refuses its dev websocket to any origin it was not
+told about, and a browser arriving through a tunnel presents the tunnel's
+hostname, not a LAN IP. A quick tunnel (`cloudflared tunnel --url ...`) still
+works for a one-off, but its random hostname is not on that list, so pages
+load and hot reload does not.
 
 bun is the package manager and `bun.lock` is the only lockfile. Node stays the
 runtime: `better-sqlite3` ships a Node-ABI native binding that bun's runtime
