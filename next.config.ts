@@ -2,6 +2,22 @@ import type { NextConfig } from "next";
 import { networkInterfaces } from "node:os";
 import path from "node:path";
 
+// Fail with a sentence rather than a segfault. better-sqlite3 13 is built
+// against N-API 10, which Node grew in 24; an older Node loads the binding
+// and dies with SIGSEGV and no message, on the first database call after
+// the server is already up. That happens in practice when a terminal opened
+// before `nvm alias default 24` still has an old Node on its PATH. This file
+// runs under the real runtime for dev, build and start alike, before any
+// route loads the binding, so it is the one place to say so.
+const requiredNodeMajor = 24;
+const nodeMajor = Number(process.versions.node.split(".")[0]);
+if (nodeMajor < requiredNodeMajor) {
+  throw new Error(
+    `UP/NEXT needs Node ${requiredNodeMajor}+ and this is ${process.version}. ` +
+      "Run `nvm use` in this terminal (it reads .nvmrc), then start again.",
+  );
+}
+
 // The addresses this machine has on its local networks, so a phone on the
 // venue wifi can open the dev server by LAN IP and still get hot reload:
 // Next blocks cross-origin requests to its dev resources unless the origin
