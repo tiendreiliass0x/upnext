@@ -11,8 +11,9 @@ export type SessionTrack = {
   /** Songs that still have to roll before this one can be voted for again. */
   cooldown: number;
   /**
-   * Who is behind the live votes, newest named voters first, capped at
-   * voterPreviewLimit. `votes` minus this length is the "and N others".
+   * Who is behind the live votes, newest named voters first, up to
+   * voterPreviewLimit of them. The phone shows as many as fit and folds the
+   * rest into "+N"; `votes` minus what is shown is the "and N others".
    */
   voters: TrackVoter[];
 };
@@ -20,9 +21,11 @@ export type SessionTrack = {
 /** A pseudonym when the voter has an account; null for a free anonymous vote. */
 export type TrackVoter = { name: string | null };
 
-export const voterPreviewLimit = 5;
-/** The room-wide stack has a whole header to itself, so it shows more. */
-export const roomVoterPreviewLimit = 8;
+// Voting is the social act in the room, so the faces are the point: send
+// enough that a phone can fill its width with them and a wide screen can show
+// a real crowd. The client decides how many fit; this only bounds the payload.
+export const voterPreviewLimit = 20;
+export const roomVoterPreviewLimit = 20;
 
 export type NowPlaying = {
   trackId: string;

@@ -203,16 +203,18 @@ a played track (409), since a guest's ballot can be up to one poll behind.
 Each row shows the faces behind its live votes: an initial in a colour derived
 from the pseudonym for every account vote, a blank bubble for every anonymous
 free vote, a `+N` for the rest, and a sentence — *"Amyr, Nathan and 171
-others"*. The server sends at most five voters per track, named ones first
-(anonymous ones are all the same bubble, so five of them would say nothing),
-and nothing that identifies a voter beyond the pseudonym they chose to show:
+others"*. The server sends up to twenty voters per track, named ones first
+(anonymous ones are all the same bubble, so a run of them would say nothing),
+and the phone shows as many faces as fit its width — measured, not guessed —
+folding the rest into the `+N`. Nothing that identifies a voter beyond the
+pseudonym they chose to show is sent:
 no account IDs, and never the anonymous voter ID, which is what entitles a
 browser to its free vote. Votes spent by a play take their faces with them.
 
 The booth's **Crowd queue** header and the guest page's **Make your picks**
 header carry the room-wide stack: one face per
 person who has voted in the room, whichever songs they picked, named first
-and newest first, up to eight, with `+N` and the sentence making up the
+and newest first, up to twenty, with `+N` and the sentence making up the
 `guestCount`. Unlike a row's faces these do not clear when a song plays —
 the person is still in the room.
 
