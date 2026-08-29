@@ -8,6 +8,7 @@ import Dashboard, {
   LibraryPicker,
   NowPlayingDock,
   QueueList,
+  facesThatFit,
 } from "@/components/Dashboard";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
@@ -1156,5 +1157,66 @@ describe("auto-advance timing", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(booth.advances()).toHaveLength(0);
+  });
+});
+
+describe("fitting faces to the screen", () => {
+  it("keeps a slot for +N only when not everyone fits", () => {
+    // 20px faces overlapping by 6px: 100px holds 6 slots.
+    expect(facesThatFit({ width: 100, faceWidth: 20, overlap: 6, count: 6 })).toBe(6);
+    expect(facesThatFit({ width: 100, faceWidth: 20, overlap: 6, count: 20 })).toBe(5);
+    expect(facesThatFit({ width: 100, faceWidth: 20, overlap: 6, count: 3 })).toBe(3);
+    // Too narrow for even one full face still shows one.
+    expect(facesThatFit({ width: 10, faceWidth: 20, overlap: 6, count: 20 })).toBe(1);
+    // Nothing measured yet: show everything rather than nothing.
+    expect(facesThatFit({ width: 0, faceWidth: 20, overlap: 6, count: 20 })).toBe(20);
+  });
+
+  it("shows as many faces as the row has room for and folds the rest into +N", async () => {
+    // jsdom has no layout; give the stack 100px and each face 20px, and a
+    // ResizeObserver that reports once.
+    const widths = Object.getOwnPropertyDescriptors(HTMLElement.prototype);
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).classList.contains("voter-stack") ? 100 : 0;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "offsetWidth", {
+      configurable: true,
+      get() {
+        return (this as HTMLElement).classList.contains("voter-face") ? 20 : 0;
+      },
+    });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private callback: () => void) {}
+        observe() {
+          this.callback();
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      const voters = Array.from({ length: 20 }, (_, index) => ({ name: `Guest ${index}` }));
+      render(<QueueList tracks={[{ ...tracks[0], votes: 25, voters }]} />);
+
+      const stack = screen.getByRole("group", { name: /voted by/i });
+      const faces = stack.querySelectorAll(".voter-face:not(.is-more)");
+      // 100px at 14px per overlapping face is six slots; one goes to +N.
+      expect(faces).toHaveLength(5);
+      expect(within(stack).getByText("+20")).toBeInTheDocument();
+      // The sentence still speaks for the whole vote, not just the faces shown.
+      expect(within(stack).getByText(/Guest 0, Guest 1 and 23 others/)).toBeInTheDocument();
+    } finally {
+      // Put the prototype back exactly as it was: restore an own descriptor
+      // if there was one, otherwise remove ours so jsdom's own getter shows.
+      for (const name of ["clientWidth", "offsetWidth"] as const) {
+        const original = widths[name];
+        if (original) Object.defineProperty(HTMLElement.prototype, name, original);
+        else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+      }
+    }
   });
 });

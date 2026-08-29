@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -2336,10 +2342,30 @@ function voterSummary(voters: TrackVoter[], votes: number) {
 }
 
 /**
+ * How many of `count` faces fit in `width` pixels when each face is
+ * `faceWidth` wide and every face after the first overlaps the previous one
+ * by `overlap`. When they do not all fit, one slot is kept for the "+N"
+ * bubble. An unknown width (nothing measured yet) shows everything.
+ */
+export function facesThatFit(input: {
+  width: number;
+  faceWidth: number;
+  overlap: number;
+  count: number;
+}) {
+  const { width, faceWidth, overlap, count } = input;
+  if (width <= 0 || faceWidth <= 0) return count;
+  const step = Math.max(1, faceWidth - overlap);
+  const slots = Math.max(1, Math.floor((width - faceWidth) / step) + 1);
+  if (count <= slots) return count;
+  return Math.max(1, slots - 1);
+}
+
+/**
  * The faces behind a row's votes: an initial for each named voter, a blank
  * bubble for a free anonymous vote, then "A, B and N others". Voting is the
  * social act in the room, so who's in on a song should be visible, not just
- * a number.
+ * a number — as many as the screen has room for, and "+N" for the rest.
  */
 function VoterStack({
   voters,
@@ -2352,19 +2378,49 @@ function VoterStack({
   label?: string;
   className?: string;
 }) {
+  const stackRef = useRef<HTMLSpanElement | null>(null);
+  // null: not measured (first paint, or no ResizeObserver) — show them all.
+  const [capacity, setCapacity] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const stack = stackRef.current;
+    if (!stack || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const first = stack.querySelector<HTMLElement>(".voter-face");
+      const second = first?.nextElementSibling as HTMLElement | null;
+      if (!first) return;
+      const faceWidth = first.offsetWidth;
+      // The overlap is the negative margin on every face after the first;
+      // if it cannot be read (no second face, or no computed style) assume
+      // the stylesheet's roughly 30% rather than none.
+      const measured = second ? -parseFloat(getComputedStyle(second).marginLeft) : NaN;
+      const overlap =
+        Number.isFinite(measured) && measured > 0 ? measured : Math.round(faceWidth * 0.3);
+      setCapacity(
+        facesThatFit({ width: stack.clientWidth, faceWidth, overlap, count: voters.length }),
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(stack);
+    return () => observer.disconnect();
+  }, [voters.length]);
+
   if (votes === 0) return null;
-  const hidden = votes - voters.length;
+  const shown = capacity === null ? voters : voters.slice(0, capacity);
+  const hidden = votes - shown.length;
   return (
     <span
       // A bare span cannot carry a name (ARIA forbids naming generic
       // elements and screen readers drop it); as a group it can, so the
       // "In the room" / "Voted by" context is announced with the names.
       role="group"
+      ref={stackRef}
       className={`voter-stack ${className}`.trim()}
       aria-label={`${label} ${voterSummary(voters, votes)}`}
     >
       <span className="voter-faces" aria-hidden="true">
-        {voters.map((voter, index) =>
+        {shown.map((voter, index) =>
           voter.name ? (
             <span
               key={index}
