@@ -464,3 +464,29 @@ describe("auto-advance guard", () => {
     expect(payload.session.nowPlaying.trackId).toBe(banger);
   });
 });
+
+describe("auto-advance guard parsing", () => {
+  it("refuses a guard it cannot read rather than dropping it", async () => {
+    const host = createAccount({ phone: "+32470000089", pseudonym: "Host" });
+    const { session, hostKey } = room(host.id);
+    setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: "next" });
+    const before = getSession(session.id)!;
+
+    const response = await nowPlayingRoute(
+      new Request(`http://localhost/api/sessions/${session.id}/now-playing`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${host.authToken}`,
+          "x-upnext-host-key": hostKey,
+        },
+        body: JSON.stringify({ trackId: "next", fromTrackId: 123 }),
+      }),
+      { params: Promise.resolve({ id: session.id }) },
+    );
+    expect(response.status).toBe(400);
+    // Nothing changed: an unreadable guard did not become no guard.
+    expect(getSession(session.id)!.nowPlaying?.trackId).toBe(before.nowPlaying?.trackId);
+    expect(getSession(session.id)!.revision).toBe(before.revision);
+  });
+});

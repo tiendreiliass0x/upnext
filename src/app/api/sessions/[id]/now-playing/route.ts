@@ -31,6 +31,9 @@ export async function POST(
     if (body.fromTrackId === null) fromTrackId = null;
     else if (typeof body.fromTrackId === "string" && body.fromTrackId.length <= 100) {
       fromTrackId = body.fromTrackId;
+    } else if (body.fromTrackId !== undefined) {
+      // A guard that cannot be read must not silently become no guard.
+      return NextResponse.json({ error: "Choose a track." }, { status: 400 });
     }
   } catch {
     return NextResponse.json({ error: "Choose a track." }, { status: 400 });

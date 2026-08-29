@@ -174,12 +174,17 @@ the room never runs dry. Guests see the same order on the ballot.
 
 If the DJ does nothing when a song ends, the booth puts the crowd pick on by
 itself. The server never decodes audio, so the booth reads the song's length
-from the file's metadata and schedules the change for a beat after
-`startedAt + duration`. The request names the song it is meant to follow and
-the server ignores it if that song is no longer on, so a second booth tab or a
-request that was slow while the DJ tapped cannot skip a song. This needs the
-booth tab open: guest phones only follow what is playing, they never drive
-it.
+from the file's metadata and, every few seconds, checks whether
+`startedAt + duration` (plus a short grace) has passed — a repeating check
+rather than one timer, so an advance that failed on bad wifi is retried, a
+song whose length could not be read is re-probed, and a browser throttling a
+background tab cannot stall it. `startedAt` is server time, so the booth
+corrects for its own clock using the server's `Date` header from each poll.
+The request names the song it is meant to follow and the server ignores it if
+that song is no longer on, so a second booth tab or a request that was slow
+while the DJ tapped cannot skip a song. It works in whichever view the host
+has open; what it needs is the booth tab itself, since guest phones only
+follow what is playing, they never drive it.
 
 Guests have no per-song play button; the only audio on a guest's phone is the
 song on air, docked under the ballot with a *Listen along* button.

@@ -218,6 +218,12 @@ async function fetchWithTimeout(
 // A beat after the song ends before the next one goes on, so the room hears
 // it finish rather than being cut off by a clock that runs slightly ahead.
 const autoAdvanceGraceMs = 1500;
+// How often the booth checks whether the song has run out. A repeating check
+// rather than one long timer: it retries an advance that failed on bad wifi,
+// re-probes a song whose length could not be read, and is not thrown off by
+// a browser throttling timers in a tab sitting behind the DJ software.
+const autoAdvanceCheckMs = 5000;
+const autoAdvanceProbeAttempts = 5;
 
 function disposeAudio(audio: HTMLAudioElement) {
   audio.onended = null;
@@ -439,6 +445,8 @@ export default function Dashboard({
   );
   const [isEnding, setIsEnding] = useState(false);
   const [isChangingTrack, setIsChangingTrack] = useState(false);
+  // Server time minus booth time, learned from poll responses.
+  const serverClockOffsetRef = useRef(0);
   const [isLoadingSession, setIsLoadingSession] = useState(
     Boolean(sharedSessionId),
   );
@@ -704,6 +712,14 @@ export default function Dashboard({
             },
           },
         );
+
+        // The server's clock, for the auto-advance: startedAt is server time
+        // and a booth laptop can be seconds off. The Date header is whole
+        // seconds; the grace period covers the rounding.
+        const serverDate = Date.parse(response.headers.get("date") ?? "");
+        if (Number.isFinite(serverDate)) {
+          serverClockOffsetRef.current = serverDate - Date.now();
+        }
 
         // The room is unchanged, so there is no body to read and no state to
         // replace. Skipping the update also avoids a re-render on every poll.
@@ -1258,42 +1274,69 @@ export default function Dashboard({
   // file's metadata (the server never decodes audio), and the request names
   // the song it is meant to follow, so a second booth tab or a request that
   // was slow while the DJ tapped cannot skip one. Needs this tab open: the
-  // guest phones only follow, they never drive.
+  // guest phones only follow, they never drive. It runs whichever view the
+  // host is looking at — holding the host key is what makes this the booth,
+  // and switching to the crowd view to show someone the ballot must not
+  // leave the room in silence.
   const changeNowPlayingRef = useRef(changeNowPlaying);
   changeNowPlayingRef.current = changeNowPlaying;
   const playingTrackId = session?.nowPlaying?.trackId ?? null;
   const playingStartedAt = session?.nowPlaying?.startedAt ?? null;
   const playingPreviewUrl = session?.nowPlaying?.previewUrl ?? null;
   useEffect(() => {
-    if (
-      view !== "dj" ||
-      !isLive ||
-      !hostKey ||
-      !playingTrackId ||
-      !playingStartedAt ||
-      !playingPreviewUrl
-    ) {
+    if (!isLive || !hostKey || !playingTrackId || !playingStartedAt || !playingPreviewUrl) {
       return;
     }
-    const probe = new Audio();
-    probe.preload = "metadata";
-    let timer: number | undefined;
-    probe.onloadedmetadata = () => {
-      if (!Number.isFinite(probe.duration) || probe.duration <= 0) return;
-      const endsAt =
-        Date.parse(playingStartedAt) + probe.duration * 1000 + autoAdvanceGraceMs;
-      timer = window.setTimeout(
-        () => void changeNowPlayingRef.current("next", playingTrackId),
-        Math.max(0, endsAt - Date.now()),
-      );
-    };
-    probe.src = playingPreviewUrl;
-    return () => {
-      window.clearTimeout(timer);
+    let endsAt: number | null = null;
+    let probe: HTMLAudioElement | null = null;
+    let probeAttempts = 0;
+
+    const dropProbe = () => {
+      if (!probe) return;
       probe.onloadedmetadata = null;
+      probe.onerror = null;
       disposeAudio(probe);
+      probe = null;
     };
-  }, [view, isLive, hostKey, playingTrackId, playingStartedAt, playingPreviewUrl]);
+    const check = () => {
+      if (endsAt === null) {
+        // No length yet: the probe failed or is still loading. Try again a
+        // few times, then leave it to the DJ.
+        if (!probe && probeAttempts < autoAdvanceProbeAttempts) startProbe();
+        return;
+      }
+      if (Date.now() + serverClockOffsetRef.current < endsAt) return;
+      // Retried on the next check if it fails or a change is in flight; the
+      // server ignores it once the song has moved on.
+      void changeNowPlayingRef.current("next", playingTrackId);
+    };
+    const startProbe = () => {
+      probeAttempts += 1;
+      const element = new Audio();
+      probe = element;
+      element.preload = "metadata";
+      element.onloadedmetadata = () => {
+        if (probe !== element) return;
+        if (Number.isFinite(element.duration) && element.duration > 0) {
+          endsAt =
+            Date.parse(playingStartedAt) + element.duration * 1000 + autoAdvanceGraceMs;
+          check();
+        }
+        dropProbe();
+      };
+      element.onerror = () => {
+        if (probe === element) dropProbe();
+      };
+      element.src = playingPreviewUrl;
+    };
+
+    startProbe();
+    const interval = window.setInterval(check, autoAdvanceCheckMs);
+    return () => {
+      window.clearInterval(interval);
+      dropProbe();
+    };
+  }, [isLive, hostKey, playingTrackId, playingStartedAt, playingPreviewUrl]);
 
   async function endCurrentSession() {
     if (!activeSessionId || !hostKey || isEnding) return;
