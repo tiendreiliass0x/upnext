@@ -21,6 +21,7 @@ const tracks: SessionTrack[] = [
     previewUrl: "/api/tracks/track-one/preview",
     playedAt: null,
     cooldown: 0,
+    voters: [],
   },
   {
     id: "track-two",
@@ -31,31 +32,12 @@ const tracks: SessionTrack[] = [
     previewUrl: "/api/tracks/track-two/preview",
     playedAt: null,
     cooldown: 0,
+    voters: [],
   },
 ];
 
-class MockAudio {
-  static instances: MockAudio[] = [];
-
-  src: string;
-  preload = "";
-  onended: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  play = vi.fn().mockResolvedValue(undefined);
-  pause = vi.fn();
-  removeAttribute = vi.fn();
-  load = vi.fn();
-
-  constructor(src: string) {
-    this.src = src;
-    MockAudio.instances.push(this);
-  }
-}
-
 beforeEach(() => {
   window.localStorage.clear();
-  MockAudio.instances = [];
-  vi.stubGlobal("Audio", MockAudio);
 });
 
 afterEach(() => {
@@ -465,26 +447,44 @@ describe("library picker", () => {
   });
 });
 
-describe("queue interactions", () => {
-  it("plays one preview at a time and ignores stale media events", async () => {
+describe("the DJ's pre-listen", () => {
+  class MockAudio {
+    static instances: MockAudio[] = [];
+    src = "";
+    preload = "";
+    onended: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onpause: (() => void) | null = null;
+    play = vi.fn().mockResolvedValue(undefined);
+    pause = vi.fn();
+    removeAttribute = vi.fn();
+    load = vi.fn();
+    constructor() {
+      MockAudio.instances.push(this);
+    }
+  }
+
+  beforeEach(() => {
+    MockAudio.instances = [];
+    vi.stubGlobal("Audio", MockAudio);
+  });
+
+  it("plays the resolved URL, one row at a time, and ignores stale media events", async () => {
     const user = userEvent.setup();
-    const { unmount } = render(<QueueList tracks={tracks} />);
-    const firstButton = screen.getByRole("button", {
-      name: /^play first track$/i,
-    });
-    const secondButton = screen.getByRole("button", {
-      name: /^play second track$/i,
-    });
+    const onAudition = vi.fn(async (track: SessionTrack) => `https://signed.example/${track.id}`);
+    const { unmount } = render(<QueueList tracks={tracks} onAudition={onAudition} />);
+    const firstButton = screen.getByRole("button", { name: /^play first track$/i });
+    const secondButton = screen.getByRole("button", { name: /^play second track$/i });
 
     await user.click(firstButton);
     await waitFor(() => expect(firstButton).toHaveAttribute("aria-pressed", "true"));
     const firstAudio = MockAudio.instances[0];
+    expect(firstAudio.src).toBe("https://signed.example/track-one");
+    expect(onAudition).toHaveBeenCalledWith(tracks[0]);
     const staleError = firstAudio.onerror;
 
     await user.click(secondButton);
-    await waitFor(() =>
-      expect(secondButton).toHaveAttribute("aria-pressed", "true"),
-    );
+    await waitFor(() => expect(secondButton).toHaveAttribute("aria-pressed", "true"));
     expect(firstAudio.pause).toHaveBeenCalled();
     staleError?.();
     expect(secondButton).toHaveAttribute("aria-pressed", "true");
@@ -495,6 +495,23 @@ describe("queue interactions", () => {
     expect(secondAudio.removeAttribute).toHaveBeenCalledWith("src");
   });
 
+  it("drops the Stop state when the URL cannot be resolved", async () => {
+    const user = userEvent.setup();
+    render(
+      <QueueList tracks={tracks} onAudition={async () => { throw new Error("nope"); }} />,
+    );
+    await user.click(screen.getByRole("button", { name: /^play first track$/i }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /^play first track$/i })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      ),
+    );
+    expect(MockAudio.instances[0].play).not.toHaveBeenCalled();
+  });
+});
+
+describe("queue interactions", () => {
   it("exposes vote count and selected state accessibly", async () => {
     const user = userEvent.setup();
     const onVote = vi.fn();
@@ -834,32 +851,45 @@ describe("the listen-along dock", () => {
     expect(screen.getByRole("button", { name: "Listen along" })).toBeDisabled();
   });
 
-  it("clears a queue row's Stop state when another player takes the audio over", async () => {
-    stubMedia();
-    const created: HTMLAudioElement[] = [];
-    vi.stubGlobal(
-      "Audio",
-      function FakeAudio(this: unknown, src?: string) {
-        const element = document.createElement("audio");
-        if (src) element.src = src;
-        created.push(element);
-        return element;
-      },
-    );
-    const user = userEvent.setup();
+  it("gives guests nothing to play: the room hears the broadcast, not the masters", () => {
     render(<QueueList tracks={tracks} />);
+    expect(screen.queryByRole("button", { name: /play/i })).not.toBeInTheDocument();
+    expect(document.querySelector("audio")).toBeNull();
+  });
+});
 
-    await user.click(screen.getByRole("button", { name: /^play first track$/i }));
-    const button = screen.getByRole("button", { name: /^stop first track$/i });
-    expect(button).toHaveAttribute("aria-pressed", "true");
+describe("the faces behind a row's votes", () => {
+  const withVoters = (voters: SessionTrack["voters"], votes: number): SessionTrack => ({
+    ...tracks[0],
+    voters,
+    votes,
+  });
 
-    // The listen-along dock claims audio and pauses this element.
-    fireEvent(created[0], new Event("pause"));
-
-    expect(screen.getByRole("button", { name: /^play first track$/i })).toHaveAttribute(
-      "aria-pressed",
-      "false",
+  it("shows an initial per named voter, a blank bubble per anonymous one, and the overflow", () => {
+    render(
+      <QueueList
+        tracks={[withVoters([{ name: "Amyr" }, { name: "Nathan Krishnan" }, { name: null }], 173)]}
+      />,
     );
+    const stack = screen.getByLabelText("Voted by Amyr, Nathan Krishnan and 171 others");
+    expect(within(stack).getByTitle("Amyr")).toHaveTextContent("A");
+    expect(within(stack).getByTitle("Nathan Krishnan")).toHaveTextContent("N");
+    expect(within(stack).getByTitle("Guest")).toBeInTheDocument();
+    expect(within(stack).getByText("+170")).toBeInTheDocument();
+    expect(within(stack).getByText("Amyr, Nathan Krishnan and 171 others")).toBeInTheDocument();
+  });
+
+  it("reads naturally for the small cases", () => {
+    const { rerender } = render(<QueueList tracks={[withVoters([{ name: "Amyr" }], 1)]} />);
+    expect(screen.getByText("Amyr")).toBeInTheDocument();
+    rerender(<QueueList tracks={[withVoters([{ name: "Amyr" }, { name: "Nathan" }], 2)]} />);
+    expect(screen.getByText("Amyr and Nathan")).toBeInTheDocument();
+    rerender(<QueueList tracks={[withVoters([{ name: "Amyr" }, { name: null }], 2)]} />);
+    expect(screen.getByText("Amyr and 1 other")).toBeInTheDocument();
+    rerender(<QueueList tracks={[withVoters([{ name: null }], 1)]} />);
+    expect(screen.getByText("1 guest voted")).toBeInTheDocument();
+    rerender(<QueueList tracks={[withVoters([], 0)]} />);
+    expect(screen.queryByText(/voted/)).not.toBeInTheDocument();
   });
 });
 
@@ -913,14 +943,26 @@ describe("auto-advance in the booth", () => {
         return Response.json({ session: room });
       }),
     );
+    // jsdom's <audio> never loads anything; a bare element is enough to
+    // capture the probe and hand it a duration.
+    const created: HTMLAudioElement[] = [];
+    vi.stubGlobal(
+      "Audio",
+      function FakeAudio(this: unknown, src?: string) {
+        const element = document.createElement("audio");
+        if (src) element.src = src;
+        created.push(element);
+        return element;
+      },
+    );
     render(<Dashboard />);
     await screen.findByText("First Track", { selector: ".now-playing-copy strong" }, { timeout: 3000 });
 
     // The booth probes the song's metadata to learn how long it is.
     const probe = await waitFor(() => {
-      const found = MockAudio.instances.find((audio) => audio.src === "/api/tracks/track-one/preview");
+      const found = created.find((audio) => audio.src.endsWith("/api/tracks/track-one/preview"));
       if (!found) throw new Error("no probe yet");
-      return found as unknown as HTMLAudioElement;
+      return found;
     });
     Object.defineProperty(probe, "duration", { configurable: true, value: 30 });
     probe.onloadedmetadata?.(new Event("loadedmetadata"));

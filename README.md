@@ -1,7 +1,7 @@
 # UP/NEXT
 
-A mobile-first DJ room where guests scan a QR code, listen to the song
-previews, and vote the queue into order.
+A mobile-first DJ room where guests scan a QR code, hear what the DJ has on,
+and vote the queue into order.
 
 ## Stack
 
@@ -55,7 +55,14 @@ name. That keeps non-audio out of the bucket; it does not prove a file decodes,
 so a corrupt song fails at play time rather than at upload.
 
 Playback streams straight from R2. A track's `/preview` route answers with a
-307 to a signed R2 URL, and the browser fetches the song from there with Range
+307 to a signed R2 URL, but only for the song the DJ currently has on: the
+room listens to the broadcast, it does not browse the masters, so a guest who
+constructs another track's URL from the payload gets a 404. The DJ can
+pre-listen to any row in the live booth: the client sends the room's host key
+in the `x-upnext-host-key` header (never a query string, so it stays out of
+access logs) and asks for the signed URL with `?as=json`, since an `<audio>`
+element cannot carry headers. From the signed
+URL the browser fetches the song with Range
 requests as it plays, so seeking and long tracks cost the app server nothing.
 The signature lasts an hour — it has to outlive the longest song plus a pause,
 because every later Range request reuses the same URL.
@@ -174,7 +181,8 @@ request that was slow while the DJ tapped cannot skip a song. This needs the
 booth tab open: guest phones only follow what is playing, they never drive
 it.
 
-Guests see the song docked under the ballot with a *Listen along* button.
+Guests have no per-song play button; the only audio on a guest's phone is the
+song on air, docked under the ballot with a *Listen along* button.
 Browsers refuse unprompted audio, so the first song needs a tap; after that a
 change of song follows automatically. A late joiner starts partway through,
 offset by how long the DJ has had the song on, so a phone roughly tracks the
@@ -184,6 +192,17 @@ arrives after the song has run out is told it has finished rather than hearing
 it restart, and the dock stays unlocked while the DJ has nothing on, so the
 next song still follows without another tap. The server refuses a new vote on
 a played track (409), since a guest's ballot can be up to one poll behind.
+
+## Who Voted
+
+Each row shows the faces behind its live votes: an initial in a colour derived
+from the pseudonym for every account vote, a blank bubble for every anonymous
+free vote, a `+N` for the rest, and a sentence — *"Amyr, Nathan and 171
+others"*. The server sends at most five voters per track, named ones first
+(anonymous ones are all the same bubble, so five of them would say nothing),
+and nothing that identifies a voter beyond the pseudonym they chose to show:
+no account IDs, and never the anonymous voter ID, which is what entitles a
+browser to its free vote. Votes spent by a play take their faces with them.
 
 ## Voting Identity
 

@@ -21,6 +21,7 @@ import {
   endSession,
   getAudioUploadByRequest,
   registerAudioUpload,
+  setNowPlaying,
 } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
@@ -172,7 +173,7 @@ describe("preview API", () => {
     );
   });
 
-  it("redirects active previews and rejects them after room end", async () => {
+  it("serves the song on air, and only that one, until the room ends", async () => {
     const account = createAccount({
       phone: "+32470000043",
       pseudonym: "Preview Host",
@@ -191,6 +192,37 @@ describe("preview API", () => {
     });
     const trackId = created.session.tracks[0].id;
 
+    // Not on air yet: nothing to hear, whatever URL a guest constructs.
+    const offAir = await getPreview(new Request("http://localhost"), {
+      params: Promise.resolve({ id: trackId }),
+    });
+    expect(offAir.status).toBe(404);
+    expect(mediaMocks.getPreviewUrl).not.toHaveBeenCalled();
+
+    // The DJ pre-listens off air with the host key in a header, as JSON.
+    const audition = await getPreview(
+      new Request("http://localhost/?as=json", {
+        headers: { "x-upnext-host-key": created.hostKey },
+      }),
+      { params: Promise.resolve({ id: trackId }) },
+    );
+    expect(audition.status).toBe(200);
+    expect(audition.headers.get("cache-control")).toBe("no-store");
+    expect(await audition.json()).toEqual({ url: "https://signed.r2.example/preview.mp3" });
+    const wrongKey = await getPreview(
+      new Request("http://localhost/?as=json", {
+        headers: { "x-upnext-host-key": "not-the-key" },
+      }),
+      { params: Promise.resolve({ id: trackId }) },
+    );
+    expect(wrongKey.status).toBe(404);
+
+    setNowPlaying({
+      sessionId: created.session.id,
+      hostKey: created.hostKey,
+      accountId: account.id,
+      trackId,
+    });
     const response = await getPreview(new Request("http://localhost"), {
       params: Promise.resolve({ id: trackId }),
     });
