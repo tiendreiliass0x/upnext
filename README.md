@@ -149,14 +149,21 @@ also take a song off. Each change stamps the track as played and bumps the
 room revision, so every guest's next poll carries it.
 
 A played song is not gone for good — people may want to hear it again — but it
-sits out on a **cooldown** until two other songs have rolled. While cooling it
-sinks below the ballot, its row says how many songs are left, and a vote on it
-is refused with *"Cooldown — try again after two/one more song(s) have
-rolled."* (409, code `COOLDOWN`). Its votes are spent when it plays: account
-votes are removed so the same people can vote it back up, and an anonymous
-guest's one free vote stays used but stops counting. So a song comes back on
-fresh votes, never on the ones that already got it played. The "crowd pick"
-shown to guests is always the first song that is off cooldown.
+sits out on a **cooldown** until two other songs have rolled (fewer in a room
+with fewer songs: a two-track room cools for one, a one-track room never
+does). While cooling it sinks below the ballot, its row says how many songs
+are left, and a vote on it is refused with *"Cooldown — try again after
+two/one more song(s) have rolled."* (409, code `COOLDOWN`). Its votes are
+spent when it plays: the rows are kept, so the room's totals do not shrink,
+but only votes cast after that play count or show as someone's pick, and the
+same people — an anonymous guest re-tapping their free vote included — can
+vote it back up once it is open. So a song comes back on fresh votes, never on
+the ones that already got it played.
+
+The crowd pick is the open song with the most live votes; on a tie a song that
+has never played goes before one that has, then the one that played longest
+ago, then the DJ's order — so every song gets its turn before any repeats, and
+the room never runs dry. Guests see the same order on the ballot.
 
 Guests see the song docked under the ballot with a *Listen along* button.
 Browsers refuse unprompted audio, so the first song needs a tap; after that a

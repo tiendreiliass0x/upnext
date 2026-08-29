@@ -8,6 +8,7 @@ import {
   castAnonymousVote,
   cooldownMessage,
   createSession,
+  getAnonymousSession,
   getSession,
   setNowPlaying,
   toggleVote,
@@ -75,21 +76,65 @@ describe("setNowPlaying", () => {
     expect(getSession(session.id)!.nowPlaying?.title).toBe("Banger");
   });
 
-  it("reports no track only when everything is still cooling down", () => {
-    const host = createAccount({ phone: "+32470000063", pseudonym: "Host" });
-    const { session, hostKey } = createSession({
+  it("never runs dry: a one-track room replays its song, a two-track room alternates", () => {
+    const host = createAccount({ phone: "+32470000085", pseudonym: "Host" });
+    const play = (sessionId: string, hostKey: string) =>
+      setNowPlaying({ sessionId, hostKey, accountId: host.id, trackId: "next" });
+    const solo = createSession({
       name: "Solo",
       venue: "",
       accountId: host.id,
       requestId: crypto.randomUUID(),
       tracks: [{ title: "Only", artist: "A" }],
     });
-    expect(
-      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: "next" }),
-    ).toBe("updated");
-    expect(
-      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: "next" }),
-    ).toBe("no_track");
+    expect(play(solo.session.id, solo.hostKey)).toBe("updated");
+    expect(play(solo.session.id, solo.hostKey)).toBe("updated");
+    // A room too small to cool down does not pretend to: nothing to wait for.
+    expect(getSession(solo.session.id)!.tracks[0].cooldown).toBe(0);
+
+    const pair = createSession({
+      name: "Pair",
+      venue: "",
+      accountId: host.id,
+      requestId: crypto.randomUUID(),
+      tracks: [
+        { title: "One", artist: "A" },
+        { title: "Two", artist: "A" },
+      ],
+    });
+    const titles: string[] = [];
+    for (let round = 0; round < 4; round += 1) {
+      expect(play(pair.session.id, pair.hostKey)).toBe("updated");
+      titles.push(getSession(pair.session.id)!.nowPlaying!.title);
+    }
+    expect(titles).toEqual(["One", "Two", "One", "Two"]);
+    // The one just played cools for a single song, since only one can roll.
+    const current = getSession(pair.session.id)!;
+    expect(current.tracks.find((t) => t.title === "Two")?.cooldown).toBe(1);
+    expect(current.tracks.find((t) => t.title === "One")?.cooldown).toBe(0);
+  });
+
+  it("gives every song its turn before repeating, even with no votes", () => {
+    const host = createAccount({ phone: "+32470000086", pseudonym: "Host" });
+    const { session, hostKey } = createSession({
+      name: "Long set",
+      venue: "",
+      accountId: host.id,
+      requestId: crypto.randomUUID(),
+      tracks: ["T1", "T2", "T3", "T4", "T5"].map((title) => ({ title, artist: "A" })),
+    });
+    const titles: string[] = [];
+    for (let round = 0; round < 10; round += 1) {
+      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: "next" });
+      titles.push(getSession(session.id)!.nowPlaying!.title);
+    }
+    // Before the fix a reopened song tied the never-played ones at zero votes
+    // and won on position, so T4 and T5 never played.
+    expect(titles).toEqual(["T1", "T2", "T3", "T4", "T5", "T1", "T2", "T3", "T4", "T5"]);
+    // The ballot shows the same order the pick will follow.
+    expect(getSession(session.id)!.tracks.map((t) => t.title)).toEqual([
+      "T1", "T2", "T3", "T4", "T5",
+    ]);
   });
 
   it("takes a chosen track, or nothing, and refuses tracks from another room", () => {
@@ -299,5 +344,65 @@ describe("voting on a track that is cooling down", () => {
     });
     expect(again?.voted).toBe(true);
     expect(again?.session.tracks.find((t) => t.id === opener)?.votes).toBe(1);
+  });
+});
+
+describe("votes across a play", () => {
+  it("keeps the room's totals when a song plays, and shows only live picks", () => {
+    const host = createAccount({ phone: "+32470000080", pseudonym: "Host" });
+    const fans = ["+32470000081", "+32470000082", "+32470000083"].map((phone) =>
+      createAccount({ phone, pseudonym: "Fan" }),
+    );
+    const { session, hostKey } = room(host.id);
+    const opener = trackId(session.id, "Opener");
+    for (const fan of fans) {
+      toggleVote({ sessionId: session.id, trackId: opener, accountId: fan.id, enabled: true });
+    }
+    const before = getSession(session.id, fans[0].id)!;
+    expect(before).toMatchObject({ totalVotes: 3, guestCount: 3, votedTrackIds: [opener] });
+
+    setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: opener });
+
+    const after = getSession(session.id, fans[0].id)!;
+    // The header does not read like the room emptied out.
+    expect(after).toMatchObject({ totalVotes: 3, guestCount: 3 });
+    // But the spent votes no longer rank the song or show as anyone's pick.
+    expect(after.tracks.find((t) => t.id === opener)?.votes).toBe(0);
+    expect(after.votedTrackIds).toEqual([]);
+  });
+
+  it("lets an anonymous guest re-tap their free vote once the song is open again", () => {
+    const host = createAccount({ phone: "+32470000084", pseudonym: "Host" });
+    const { session, hostKey } = room(host.id);
+    const opener = trackId(session.id, "Opener");
+    const voterId = "anonymous-voter-00000001";
+    const play = (id: string) =>
+      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: id });
+
+    expect(
+      castAnonymousVote({ sessionId: session.id, trackId: opener, voterId }),
+    ).toMatchObject({ status: "voted" });
+    play(opener);
+    play(trackId(session.id, "Banger"));
+    play(trackId(session.id, "Closer"));
+
+    const between = getAnonymousSession(session.id, voterId)!;
+    expect(between.anonymousVoteUsed).toBe(true);
+    // The spent tap is no longer shown as a live pick, so the guest can tap again.
+    expect(between.votedTrackIds).toEqual([]);
+    const revision = between.revision;
+
+    const again = castAnonymousVote({ sessionId: session.id, trackId: opener, voterId });
+    expect(again).toMatchObject({ status: "voted", voted: true });
+    if (again.status !== "voted") throw new Error("not voted");
+    // Before the fix this answered "voted" and changed nothing.
+    expect(again.session.tracks.find((t) => t.id === opener)?.votes).toBe(1);
+    expect(again.session.votedTrackIds).toEqual([opener]);
+    expect(again.session.revision).toBe(revision + 1);
+    // Still one free vote, now live on Opener again.
+    expect(getAnonymousSession(session.id, voterId)).toMatchObject({
+      anonymousVoteUsed: true,
+      votedTrackIds: [opener],
+    });
   });
 });
