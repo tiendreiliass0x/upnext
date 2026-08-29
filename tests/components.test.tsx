@@ -65,9 +65,10 @@ describe("identity onboarding", () => {
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith("+32 470 12 34 56", "Night Owl"),
     );
-    expect(
-      screen.getByText(/phone number is only your login/i),
-    ).toBeInTheDocument();
+    // Picking a name gets the headline alone: no explanatory line, and
+    // nothing about phone numbers beyond the field itself.
+    expect(screen.queryByText(/phone number is/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/pseudonym is what/i)).not.toBeInTheDocument();
   });
 
   it("shows account errors without leaving the form", async () => {

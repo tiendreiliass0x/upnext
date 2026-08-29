@@ -2669,13 +2669,16 @@ export function IdentityGate({
                 : "Keep the phone private."}
           </span>
         </h1>
-        <p>
-          {mode === "login"
-            ? "Enter the phone number linked to your account."
-            : afterFreeVote
-              ? "Your free vote stays in the queue. Add a private phone number and pseudonym to make another pick."
-              : "Your pseudonym is what the session sees. Your phone number is only your login and is never shown to anyone."}
-        </p>
+        {/* The headline says it all when picking a name; only the other two
+            modes need a line of explanation. */}
+        {mode === "login" ? (
+          <p>Enter the phone number linked to your account.</p>
+        ) : afterFreeVote ? (
+          <p>
+            Your free vote stays in the queue. Add a private phone number and
+            pseudonym to make another pick.
+          </p>
+        ) : null}
       </section>
 
       <form className="identity-form" onSubmit={submitIdentity}>
