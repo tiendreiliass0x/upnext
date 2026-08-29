@@ -185,9 +185,24 @@ export function createAccount(input: {
 }
 
 export function updateAccountPseudonym(account: StoredAccount, pseudonym: string) {
-  getDatabase()
-    .prepare("UPDATE accounts SET pseudonym = ?, updated_at = ? WHERE id = ?")
-    .run(pseudonym, new Date().toISOString(), account.id);
+  const database = getDatabase();
+  database.transaction(() => {
+    const now = new Date().toISOString();
+    database
+      .prepare("UPDATE accounts SET pseudonym = ?, updated_at = ? WHERE id = ?")
+      .run(pseudonym, now, account.id);
+    // The name is on the face stacks of every live room this account has
+    // voted in, and guests poll with a revision-keyed ETag: without a bump
+    // they would keep hearing 304 and showing the old name until someone
+    // else in that room voted.
+    database
+      .prepare(
+        `UPDATE sessions SET revision = revision + 1
+         WHERE ended_at IS NULL AND expires_at > ?
+           AND id IN (SELECT session_id FROM votes WHERE account_id = ?)`,
+      )
+      .run(now, account.id);
+  })();
   return { ...account, pseudonym };
 }
 

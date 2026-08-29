@@ -131,26 +131,36 @@ type VoterRow = { track_id: string; name: string | null };
 // leaves the server: no account IDs, and never the anonymous voter ID, which
 // is what entitles a browser to its free vote.
 function getTrackVoters(sessionId: string) {
+  // Capped per track in SQL rather than after the fact: this runs on every
+  // guest poll, and a big room would otherwise hand back every live vote
+  // row only for all but five per track to be thrown away.
   const rows = getDatabase()
     .prepare(
-      `SELECT v.track_id, v.name
-       FROM (
-         SELECT vo.track_id, vo.created_at, a.pseudonym AS name
-         FROM votes vo JOIN accounts a ON a.id = vo.account_id
-         WHERE vo.session_id = ?
-         UNION ALL
-         SELECT av.track_id, av.created_at, NULL AS name
-         FROM anonymous_votes av WHERE av.session_id = ?
-       ) v
-       JOIN tracks t ON t.id = v.track_id
-       WHERE v.created_at > COALESCE(t.played_at, '')
-       ORDER BY v.track_id, (v.name IS NULL) ASC, v.created_at DESC`,
+      `SELECT track_id, name FROM (
+         SELECT v.track_id, v.name,
+                ROW_NUMBER() OVER (
+                  PARTITION BY v.track_id
+                  ORDER BY (v.name IS NULL) ASC, v.created_at DESC
+                ) AS rank
+         FROM (
+           SELECT vo.track_id, vo.created_at, a.pseudonym AS name
+           FROM votes vo JOIN accounts a ON a.id = vo.account_id
+           WHERE vo.session_id = ?
+           UNION ALL
+           SELECT av.track_id, av.created_at, NULL AS name
+           FROM anonymous_votes av WHERE av.session_id = ?
+         ) v
+         JOIN tracks t ON t.id = v.track_id
+         WHERE v.created_at > COALESCE(t.played_at, '')
+       )
+       WHERE rank <= ?
+       ORDER BY track_id, rank`,
     )
-    .all(sessionId, sessionId) as VoterRow[];
+    .all(sessionId, sessionId, voterPreviewLimit) as VoterRow[];
   const voters = new Map<string, TrackVoter[]>();
   for (const row of rows) {
     const list = voters.get(row.track_id) ?? [];
-    if (list.length < voterPreviewLimit) list.push({ name: row.name });
+    list.push({ name: row.name });
     voters.set(row.track_id, list);
   }
   return voters;
