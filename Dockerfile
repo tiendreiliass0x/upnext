@@ -14,7 +14,7 @@
 # Node is also the only possible runtime here: bun cannot load better-sqlite3's
 # native binding at all.
 
-FROM oven/bun:1 AS bunbin
+FROM oven/bun:1.4.0 AS bunbin
 
 FROM node:22-slim AS deps
 COPY --from=bunbin /usr/local/bin/bun /usr/local/bin/bun

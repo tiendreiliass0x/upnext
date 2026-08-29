@@ -33,7 +33,7 @@ jobs:
           node-version: 22
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.2.20
+          bun-version: 1.4.0
 
       - name: Cache bun downloads
         uses: actions/cache@v4
