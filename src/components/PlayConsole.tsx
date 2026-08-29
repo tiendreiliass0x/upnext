@@ -300,7 +300,7 @@ export default function PlayConsole() {
         <header className="app-header">
           <span className="wordmark">
             <span className="wordmark-dot" aria-hidden="true" />
-            UP/NEXT
+            YOU/NEXT
           </span>
         </header>
         <main className="page-shell">
@@ -323,7 +323,7 @@ export default function PlayConsole() {
       <header className="app-header">
         <Link className="wordmark" href="/">
           <span className="wordmark-dot" aria-hidden="true" />
-          UP/NEXT
+          YOU/NEXT
         </Link>
         <Link className="text-button" href="/">
           <ArrowLeft size={15} /> Booth

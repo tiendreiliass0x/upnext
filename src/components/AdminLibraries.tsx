@@ -309,7 +309,7 @@ export default function AdminLibraries() {
         <header className="app-header">
           <span className="wordmark">
             <span className="wordmark-dot" aria-hidden="true" />
-            UP/NEXT admin
+            YOU/NEXT admin
           </span>
         </header>
         <main className="identity-page page-shell">
@@ -358,7 +358,7 @@ export default function AdminLibraries() {
       <header className="app-header">
         <span className="wordmark">
           <span className="wordmark-dot" aria-hidden="true" />
-          UP/NEXT admin
+          YOU/NEXT admin
         </span>
         <button type="button" className="text-button" onClick={() => saveToken("")}>
           Lock

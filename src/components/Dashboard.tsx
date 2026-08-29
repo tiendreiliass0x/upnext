@@ -1380,7 +1380,7 @@ export default function Dashboard({
         <header className="app-header">
           <span className="wordmark">
             <span className="wordmark-dot" aria-hidden="true" />
-            UP/NEXT
+            YOU/NEXT
           </span>
         </header>
         <LoadingRoom
@@ -1401,7 +1401,7 @@ export default function Dashboard({
         <header className="app-header">
           <span className="wordmark">
             <span className="wordmark-dot" aria-hidden="true" />
-            UP/NEXT
+            YOU/NEXT
           </span>
           {sharedSessionId && (
             <span className="guest-header-room">
@@ -1458,7 +1458,7 @@ export default function Dashboard({
           aria-label="Open DJ booth"
         >
           <span className="wordmark-dot" aria-hidden="true" />
-          UP/NEXT
+          YOU/NEXT
         </button>
 
         <div className="header-actions">
@@ -1833,16 +1833,16 @@ function DJSetup({
       <section className="setup-hero">
         <div>
           <span className="eyebrow">
-            <Radio size={14} /> Set up the room
+            <Radio size={14} /> Set up your session
           </span>
           <h1>
-            Build the room.
-            <span>Let the crowd move it.</span>
+            Broadcast your set.
+            <span>Let your fans steer it.</span>
           </h1>
         </div>
         <p>
-          Add your set, open a live room, and let every phone shape what plays
-          next.
+          For music curators and DJs. Open a live session, share one link, and
+          every fan&apos;s phone bids on what plays next.
         </p>
       </section>
 
@@ -1852,8 +1852,8 @@ function DJSetup({
             <div className="section-number">01</div>
             <div className="section-content">
               <div className="section-heading">
-                <h2 id="room-details-title">Name the night</h2>
-                <p>This is what guests see after they scan.</p>
+                <h2 id="room-details-title">Name the session</h2>
+                <p>This is what your fans see when they join.</p>
               </div>
               <div className="field-grid">
                 <label className="field">
@@ -1886,7 +1886,7 @@ function DJSetup({
               <div className="section-heading track-heading">
                 <div>
                   <h2 id="music-title">Add the music</h2>
-                  <p>Full songs, stored privately and streamed to guests.</p>
+                  <p>Full songs, stored privately and streamed to your fans.</p>
                 </div>
                 {tracks.length > 0 && (
                   <button
@@ -2003,7 +2003,7 @@ function DJSetup({
 
         <aside className="launch-panel">
           <div className="launch-art" aria-hidden="true">
-            <span>UP</span>
+            <span>YOU</span>
             <AudioLines size={54} strokeWidth={1.3} />
             <span>NEXT</span>
           </div>
@@ -2029,7 +2029,7 @@ function DJSetup({
             <ArrowRight size={20} />
           </button>
           <small className="launch-note">
-            Preview audio is stored privately in R2.
+            Your music is stored privately and only streams inside the session.
           </small>
         </aside>
       </div>
@@ -2671,10 +2671,10 @@ export function IdentityGate({
         </h1>
         <p>
           {mode === "login"
-            ? "Enter the phone number linked to your account. Phone verification will be added later."
+            ? "Enter the phone number linked to your account."
             : afterFreeVote
               ? "Your free vote stays in the queue. Add a private phone number and pseudonym to make another pick."
-              : "Your pseudonym appears in the app. Your phone number identifies your account and is never shown to the room."}
+              : "Your pseudonym is what the session sees. Your phone number is only your login and is never shown to anyone."}
         </p>
       </section>
 
@@ -2743,9 +2743,6 @@ export function IdentityGate({
           >
             {mode === "login" ? "Create one" : "Log in"}
           </button>
-        </p>
-        <p className="identity-note">
-          Phone verification is not enabled in this MVP.
         </p>
       </form>
     </main>
