@@ -57,7 +57,11 @@ so a corrupt song fails at play time rather than at upload.
 Playback streams straight from R2. A track's `/preview` route answers with a
 307 to a signed R2 URL, but only for the song the DJ currently has on: the
 room listens to the broadcast, it does not browse the masters, so a guest who
-constructs another track's URL from the payload gets a 404. From the signed
+constructs another track's URL from the payload gets a 404. The DJ can
+pre-listen to any row in the live booth: the client sends the room's host key
+in the `x-upnext-host-key` header (never a query string, so it stays out of
+access logs) and asks for the signed URL with `?as=json`, since an `<audio>`
+element cannot carry headers. From the signed
 URL the browser fetches the song with Range
 requests as it plays, so seeking and long tracks cost the app server nothing.
 The signature lasts an hour — it has to outlive the longest song plus a pause,

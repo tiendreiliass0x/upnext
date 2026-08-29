@@ -1190,6 +1190,21 @@ export default function Dashboard({
     window.history.replaceState({}, "", window.location.pathname);
   }
 
+  // The host key goes in a header (never a URL) and the signed R2 URL comes
+  // back as JSON, since an <audio src> cannot carry headers.
+  async function auditionTrack(track: SessionTrack) {
+    if (!track.previewUrl) throw new Error("This track has no audio.");
+    const response = await fetchWithTimeout(`${track.previewUrl}?as=json`, {
+      cache: "no-store",
+      headers: { "x-upnext-host-key": hostKey },
+    });
+    const data = await readJson<{ url?: string; error?: string }>(response);
+    if (!response.ok || !data.url) {
+      throw new Error(data.error || "This track could not be loaded.");
+    }
+    return data.url;
+  }
+
   async function changeNowPlaying(trackId: string | "next" | null) {
     if (!activeSessionId || !hostKey || isChangingTrack) return;
     const roomId = activeSessionId;
@@ -1463,6 +1478,7 @@ export default function Dashboard({
           onEnd={() => void endCurrentSession()}
           isChangingTrack={isChangingTrack}
           onPlay={(trackId) => void changeNowPlaying(trackId)}
+          onAudition={auditionTrack}
         />
       )}
 
@@ -1932,6 +1948,8 @@ type DJLiveRoomProps = {
   onEnd: () => void;
   isChangingTrack: boolean;
   onPlay: (trackId: string | "next" | null) => void;
+  /** Resolves a row to a playable URL for the DJ's pre-listen. */
+  onAudition: (track: SessionTrack) => Promise<string>;
 };
 
 function DJLiveRoom({
@@ -1946,6 +1964,7 @@ function DJLiveRoom({
   onEnd,
   isChangingTrack,
   onPlay,
+  onAudition,
 }: DJLiveRoomProps) {
   if (isLoading || !session || !sessionLink) {
     return <LoadingRoom label="Opening the room" />;
@@ -2076,7 +2095,7 @@ function DJLiveRoom({
               )}
             </div>
           </section>
-          <QueueList tracks={session.tracks} />
+          <QueueList tracks={session.tracks} onAudition={onAudition} />
         </section>
       </div>
     </main>
@@ -2251,6 +2270,12 @@ type QueueListProps = {
   pendingVotes?: Set<string>;
   lockSelectedVotes?: boolean;
   onVote?: (trackId: string) => void;
+  /**
+   * When given, rows with audio get a play button that resolves through this
+   * before playing. Only the DJ's live room passes it; guests hear the
+   * broadcast and nothing else.
+   */
+  onAudition?: (track: SessionTrack) => Promise<string>;
 };
 
 export function QueueList({
@@ -2260,7 +2285,75 @@ export function QueueList({
   pendingVotes = new Set(),
   lockSelectedVotes = false,
   onVote,
+  onAudition,
 }: QueueListProps) {
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playingTrackId, setPlayingTrackId] = useState("");
+  const [loadingTrackId, setLoadingTrackId] = useState("");
+
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) disposeAudio(audioRef.current);
+      audioRef.current = null;
+    };
+  }, []);
+
+  function stopAudition() {
+    if (audioRef.current) disposeAudio(audioRef.current);
+    audioRef.current = null;
+    setPlayingTrackId("");
+    setLoadingTrackId("");
+  }
+
+  async function toggleAudition(track: SessionTrack) {
+    if (!onAudition || !track.previewUrl) return;
+    if (playingTrackId === track.id || loadingTrackId === track.id) {
+      stopAudition();
+      return;
+    }
+
+    stopAudition();
+    const audio = new Audio();
+    audio.preload = "none";
+    audioRef.current = audio;
+    setLoadingTrackId(track.id);
+    audio.onended = () => {
+      if (audioRef.current === audio) {
+        audioRef.current = null;
+        setPlayingTrackId("");
+      }
+    };
+    audio.onerror = () => {
+      if (audioRef.current === audio) {
+        audioRef.current = null;
+        setLoadingTrackId("");
+        setPlayingTrackId("");
+      }
+    };
+    // Another player can pause this one when it takes over; the row must not
+    // keep showing Stop for something that is no longer playing.
+    audio.onpause = () => {
+      if (audioRef.current === audio) setPlayingTrackId("");
+    };
+
+    try {
+      const url = await onAudition(track);
+      // A later click has taken over; this result is stale.
+      if (audioRef.current !== audio) return;
+      audio.src = url;
+      claimAudio(audio);
+      await audio.play();
+      if (audioRef.current === audio) setPlayingTrackId(track.id);
+    } catch {
+      if (audioRef.current === audio) {
+        disposeAudio(audio);
+        audioRef.current = null;
+        setPlayingTrackId("");
+      }
+    } finally {
+      if (audioRef.current === audio) setLoadingTrackId("");
+    }
+  }
   return (
     <ol className="queue-list">
       {tracks.map((track, index) => {
@@ -2275,9 +2368,27 @@ export function QueueList({
             className={`${index === 0 && !cooling ? "is-leading" : ""}${cooling ? " is-played" : ""}`}
           >
             <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
-            <span className="queue-art" aria-hidden="true">
-              <AudioLines size={20} strokeWidth={1.7} />
-            </span>
+            {onAudition && track.previewUrl ? (
+              <button
+                type="button"
+                className="queue-art preview-play"
+                onClick={() => void toggleAudition(track)}
+                aria-label={`${playingTrackId === track.id ? "Stop" : "Play"} ${track.title}`}
+                aria-pressed={playingTrackId === track.id}
+              >
+                {loadingTrackId === track.id ? (
+                  <span className="preview-loader" aria-hidden="true" />
+                ) : playingTrackId === track.id ? (
+                  <Pause size={17} fill="currentColor" />
+                ) : (
+                  <Play size={17} fill="currentColor" />
+                )}
+              </button>
+            ) : (
+              <span className="queue-art" aria-hidden="true">
+                <AudioLines size={20} strokeWidth={1.7} />
+              </span>
+            )}
             <span className="track-copy">
               <strong>{track.title}</strong>
               <small>

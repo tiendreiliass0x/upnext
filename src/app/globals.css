@@ -973,6 +973,26 @@ button:active:not(:disabled) {
   color: var(--ink-inverse);
 }
 
+.preview-play {
+  border: 0;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.preview-play:hover,
+.preview-play[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.preview-loader {
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+}
+
 .is-leading .queue-rank {
   color: var(--ink);
   font-weight: 800;
@@ -1492,6 +1512,10 @@ button:active:not(:disabled) {
     animation: level-pulse 900ms ease-in-out infinite alternate;
   }
 
+  .preview-loader {
+    animation: preview-spin 700ms linear infinite;
+  }
+
   .loading-mark span:nth-child(2) { animation-delay: 120ms; }
   .loading-mark span:nth-child(3) { animation-delay: 240ms; }
 }
@@ -1505,6 +1529,10 @@ button:active:not(:disabled) {
     opacity: 1;
     transform: translateY(0);
   }
+}
+
+@keyframes preview-spin {
+  to { transform: rotate(360deg); }
 }
 
 @keyframes level-pulse {
