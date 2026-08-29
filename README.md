@@ -43,7 +43,16 @@ code point there. The hostname is listed in `allowedDevOrigins` in
 `next.config.ts` next to the LAN addresses, which is what lets hot reload work
 through the tunnel: Next refuses its dev websocket to any origin it was not
 told about, and a browser arriving through a tunnel presents the tunnel's
-hostname, not a LAN IP. A quick tunnel (`cloudflared tunnel --url ...`) still
+hostname, not a LAN IP.
+
+Each machine that runs the booth gets its own tunnel and hostname
+(`sound.younext.dev` is the second one), because one tunnel with two
+connectors round-robins requests between them, and two dev servers do not
+share a database. On the new machine: `cloudflared tunnel login`,
+`cloudflared tunnel create <name>`, `cloudflared tunnel route dns <name>
+<host>.younext.dev`, the same `config.yml` with `127.0.0.1:3000` as the
+service, `cloudflared service install`, that machine's `APP_PUBLIC_URL`, and
+the hostname added to `devTunnelHosts` in `next.config.ts`. A quick tunnel (`cloudflared tunnel --url ...`) still
 works for a one-off, but its random hostname is not on that list, so pages
 load and hot reload does not.
 
