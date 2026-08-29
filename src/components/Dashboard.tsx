@@ -2646,31 +2646,38 @@ export function IdentityGate({
   return (
     <main className="identity-page page-shell">
       <section className="identity-intro">
+        {/* This is the landing page for a curator or DJ arriving cold, so the
+            headline sells the product and the form beside it is the way in.
+            A fan who followed a session link gets a lighter welcome. */}
         <span className="eyebrow">
           <UserRound size={14} /> {mode === "login"
             ? "Welcome back"
             : afterFreeVote
               ? "Keep voting"
               : joiningRoom
-                ? "Join the room"
-                : "Your profile"}
+                ? "Join the session"
+                : "For music curators and DJs"}
         </span>
         <h1>
           {mode === "login"
             ? "Log in by phone."
             : afterFreeVote
               ? "Your first vote is in."
-              : "Pick a name."}
+              : joiningRoom
+                ? "Pick a name."
+                : "Your fans decide what plays next."}
           <span>
             {mode === "login"
               ? "Continue on this device."
               : afterFreeVote
                 ? "Add your phone to vote again."
-                : "Keep the phone private."}
+                : joiningRoom
+                  ? "Then bid on what plays next."
+                  : "Open a broadcast session in a minute."}
           </span>
         </h1>
-        {/* The headline says it all when picking a name; only the other two
-            modes need a line of explanation. */}
+        {/* The headline carries the pitch; only logging in and keep-voting
+            need a line of explanation. */}
         {mode === "login" ? (
           <p>Enter the phone number linked to your account.</p>
         ) : afterFreeVote ? (

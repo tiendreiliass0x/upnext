@@ -1221,3 +1221,21 @@ describe("fitting faces to the screen", () => {
     }
   });
 });
+
+describe("the first screen's headline", () => {
+  it("sells the product to a curator or DJ arriving cold", () => {
+    render(<IdentityGate joiningRoom={false} onSave={vi.fn()} onLogin={vi.fn()} />);
+    expect(
+      screen.getByRole("heading", { level: 1, name: /Your fans decide what plays next/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/For music curators and DJs/)).toBeInTheDocument();
+    expect(screen.queryByText(/Pick a name/)).not.toBeInTheDocument();
+  });
+
+  it("just asks a fan who followed a session link for a name", () => {
+    render(<IdentityGate joiningRoom onSave={vi.fn()} onLogin={vi.fn()} />);
+    expect(screen.getByRole("heading", { level: 1, name: /Pick a name/ })).toBeInTheDocument();
+    expect(screen.getByText(/Join the session/)).toBeInTheDocument();
+    expect(screen.queryByText(/Your fans decide/)).not.toBeInTheDocument();
+  });
+});
