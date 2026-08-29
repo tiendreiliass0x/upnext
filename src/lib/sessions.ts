@@ -21,6 +21,8 @@ export type SessionTrack = {
 export type TrackVoter = { name: string | null };
 
 export const voterPreviewLimit = 5;
+/** The room-wide stack has a whole header to itself, so it shows more. */
+export const roomVoterPreviewLimit = 8;
 
 export type NowPlaying = {
   trackId: string;
@@ -41,6 +43,12 @@ export type PublicSession = {
   votedTrackIds: string[];
   anonymousVoteUsed: boolean;
   nowPlaying: NowPlaying | null;
+  /**
+   * Everyone who has voted in the room, one entry per person, named first
+   * and newest first, capped at roomVoterPreviewLimit. `guestCount` minus
+   * this length is the "and N others".
+   */
+  voters: TrackVoter[];
   tracks: SessionTrack[];
 };
 
@@ -158,6 +166,28 @@ function voteStamp(playedAt: string | null) {
     : now;
 }
 
+// One face per person, whichever songs they voted for, ordered like a row's
+// faces: named first, then whoever voted most recently. Counted the same way
+// as guest_count so the "+N" always adds up.
+function getRoomVoters(sessionId: string) {
+  return getDatabase()
+    .prepare(
+      `SELECT name FROM (
+         SELECT a.pseudonym AS name, MAX(vo.created_at) AS last_at
+         FROM votes vo JOIN accounts a ON a.id = vo.account_id
+         WHERE vo.session_id = ?
+         GROUP BY vo.account_id
+         UNION ALL
+         SELECT NULL AS name, MAX(av.created_at) AS last_at
+         FROM anonymous_votes av WHERE av.session_id = ?
+         GROUP BY av.voter_id
+       )
+       ORDER BY (name IS NULL) ASC, last_at DESC
+       LIMIT ?`,
+    )
+    .all(sessionId, sessionId, roomVoterPreviewLimit) as TrackVoter[];
+}
+
 function trackPreviewUrl(trackId: string, previewKey: string | null) {
   return previewKey ? `/api/tracks/${encodeURIComponent(trackId)}/preview` : null;
 }
@@ -263,6 +293,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
       guestCount: totals.guest_count,
       votedTrackIds,
       anonymousVoteUsed: false,
+      voters: getRoomVoters(session.id),
       nowPlaying:
         playing && session.now_playing_started_at
           ? {

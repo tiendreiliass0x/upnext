@@ -615,6 +615,34 @@ button:active:not(:disabled) {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, var(--surface));
 }
 
+/* The room-wide stack under the "Crowd queue" title: bigger faces, and a
+   top margin instead of the row's tight one. */
+.voter-stack.room-voters {
+  margin: 12px 0 0;
+  display: flex;
+  gap: 4px 9px;
+  /* Undo the header's eyebrow styling, which targets any direct span. */
+  color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.room-voters .voter-face {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+}
+
+.room-voters .voter-face + .voter-face {
+  margin-left: -8px;
+}
+
+.room-voters .voter-face.is-more {
+  font-size: 9px;
+}
+
 .voter-stack small {
   color: var(--muted);
   font-size: 11px;

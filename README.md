@@ -209,6 +209,12 @@ and nothing that identifies a voter beyond the pseudonym they chose to show:
 no account IDs, and never the anonymous voter ID, which is what entitles a
 browser to its free vote. Votes spent by a play take their faces with them.
 
+The booth's **Crowd queue** header carries the room-wide stack: one face per
+person who has voted in the room, whichever songs they picked, named first
+and newest first, up to eight, with `+N` and the sentence making up the
+`guestCount`. Unlike a row's faces these do not clear when a song plays —
+the person is still in the room.
+
 ## Voting Identity
 
 QR guests receive a browser voter ID in local storage and can cast one free
