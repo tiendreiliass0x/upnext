@@ -319,11 +319,6 @@ export default function AdminLibraries() {
               Admin token
               <span>Kept in this browser only.</span>
             </h1>
-            <p>
-              This is the value of ADMIN_TOKEN on the server. It is separate from
-              the phone login on purpose, so the catalogue does not inherit that
-              account&apos;s weaknesses.
-            </p>
           </section>
           <form
             className="identity-form"
