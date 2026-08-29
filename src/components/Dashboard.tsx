@@ -2356,6 +2356,10 @@ function VoterStack({
   const hidden = votes - voters.length;
   return (
     <span
+      // A bare span cannot carry a name (ARIA forbids naming generic
+      // elements and screen readers drop it); as a group it can, so the
+      // "In the room" / "Voted by" context is announced with the names.
+      role="group"
       className={`voter-stack ${className}`.trim()}
       aria-label={`${label} ${voterSummary(voters, votes)}`}
     >

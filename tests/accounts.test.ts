@@ -8,6 +8,7 @@ import {
   updateAccountPseudonym,
 } from "@/lib/accounts";
 import { getAccountFromRequest } from "@/lib/auth";
+import { createSession, getSession, toggleVote } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
 setupTestDatabase();
@@ -69,5 +70,42 @@ describe("accounts", () => {
       )?.id,
     ).toBe(account.id);
     expect(getAccountFromRequest(new Request("http://localhost"))).toBeNull();
+  });
+});
+
+describe("renaming while in a room", () => {
+  it("bumps the revision of every live room the account has voted in, so guests see the new name", () => {
+    const host = createAccount({ phone: "+32470005001", pseudonym: "Host" });
+    const fan = createAccount({ phone: "+32470005002", pseudonym: "Old Name" });
+    const bystander = createAccount({ phone: "+32470005003", pseudonym: "Host Two" });
+    const rooms = [host, bystander].map((owner) =>
+      createSession({
+        name: "Set",
+        venue: "",
+        accountId: owner.id,
+        requestId: crypto.randomUUID(),
+        tracks: [{ title: "T", artist: "A" }],
+      }),
+    );
+    const [votedIn, notVotedIn] = rooms;
+    toggleVote({
+      sessionId: votedIn.session.id,
+      trackId: getSession(votedIn.session.id)!.tracks[0].id,
+      accountId: fan.id,
+      enabled: true,
+    });
+    const before = getSession(votedIn.session.id)!;
+    const untouchedBefore = getSession(notVotedIn.session.id)!.revision;
+    expect(before.tracks[0].voters).toEqual([{ name: "Old Name" }]);
+
+    updateAccountPseudonym(fan, "New Name");
+
+    const after = getSession(votedIn.session.id)!;
+    // A guest polling with the old ETag now gets a body instead of a 304.
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.tracks[0].voters).toEqual([{ name: "New Name" }]);
+    expect(after.voters).toEqual([{ name: "New Name" }]);
+    // Rooms the account never voted in are left alone.
+    expect(getSession(notVotedIn.session.id)!.revision).toBe(untouchedBefore);
   });
 });
