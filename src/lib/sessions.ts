@@ -441,6 +441,12 @@ export function setNowPlaying(input: {
   hostKey: string;
   accountId: string;
   trackId: string | "next" | null;
+  /**
+   * Only change if this is still what is playing (null: nothing is). Set by
+   * the booth's auto-advance so a second booth tab, or a request that was
+   * slow while the DJ tapped, cannot skip a song.
+   */
+  fromTrackId?: string | null;
 }) {
   const database = getDatabase();
   return database
@@ -448,11 +454,16 @@ export function setNowPlaying(input: {
       const now = new Date().toISOString();
       const session = database
         .prepare(
-          `SELECT id, host_key, host_account_id FROM sessions
+          `SELECT id, host_key, host_account_id, now_playing_track_id FROM sessions
            WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
         )
         .get(input.sessionId.toUpperCase(), now) as
-        | { id: string; host_key: string; host_account_id: string }
+        | {
+            id: string;
+            host_key: string;
+            host_account_id: string;
+            now_playing_track_id: string | null;
+          }
         | undefined;
       if (!session) return "not_found" as const;
       if (
@@ -460,6 +471,12 @@ export function setNowPlaying(input: {
         session.host_account_id !== input.accountId
       ) {
         return "forbidden" as const;
+      }
+      if (
+        input.fromTrackId !== undefined &&
+        session.now_playing_track_id !== input.fromTrackId
+      ) {
+        return "stale" as const;
       }
 
       let trackId: string | null = null;

@@ -406,3 +406,61 @@ describe("votes across a play", () => {
     });
   });
 });
+
+describe("auto-advance guard", () => {
+  it("only moves on from the song it was meant to follow", () => {
+    const host = createAccount({ phone: "+32470000087", pseudonym: "Host" });
+    const { session, hostKey } = room(host.id);
+    const opener = trackId(session.id, "Opener");
+    const banger = trackId(session.id, "Banger");
+    const change = (trackId: string | "next" | null, fromTrackId?: string | null) =>
+      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId, fromTrackId });
+
+    change(opener);
+    const revision = getSession(session.id)!.revision;
+    // The DJ already tapped: the booth's timer for Opener must not skip again.
+    change(banger);
+    expect(change("next", opener)).toBe("stale");
+    expect(getSession(session.id)!.nowPlaying?.trackId).toBe(banger);
+    expect(getSession(session.id)!.revision).toBe(revision + 1);
+
+    // Nothing on: a timer that fires after "Take it off" does nothing either.
+    change(null);
+    expect(change("next", banger)).toBe("stale");
+    expect(getSession(session.id)!.nowPlaying).toBeNull();
+
+    // The right song is still on: the advance goes through, to the crowd pick
+    // (Closer, which has never played, goes before Banger, which has).
+    change(opener);
+    expect(change("next", opener)).toBe("updated");
+    expect(getSession(session.id)!.nowPlaying?.trackId).toBe(trackId(session.id, "Closer"));
+  });
+
+  it("answers a stale advance with the current room, not an error", async () => {
+    const host = createAccount({ phone: "+32470000088", pseudonym: "Host" });
+    const { session, hostKey } = room(host.id);
+    const opener = trackId(session.id, "Opener");
+    const banger = trackId(session.id, "Banger");
+    setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: banger });
+
+    const response = await nowPlayingRoute(
+      new Request(`http://localhost/api/sessions/${session.id}/now-playing`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${host.authToken}`,
+          "x-upnext-host-key": hostKey,
+        },
+        body: JSON.stringify({ trackId: "next", fromTrackId: opener }),
+      }),
+      { params: Promise.resolve({ id: session.id }) },
+    );
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      stale?: boolean;
+      session: { nowPlaying: { trackId: string } };
+    };
+    expect(payload.stale).toBe(true);
+    expect(payload.session.nowPlaying.trackId).toBe(banger);
+  });
+});

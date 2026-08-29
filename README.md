@@ -165,6 +165,15 @@ has never played goes before one that has, then the one that played longest
 ago, then the DJ's order — so every song gets its turn before any repeats, and
 the room never runs dry. Guests see the same order on the ballot.
 
+If the DJ does nothing when a song ends, the booth puts the crowd pick on by
+itself. The server never decodes audio, so the booth reads the song's length
+from the file's metadata and schedules the change for a beat after
+`startedAt + duration`. The request names the song it is meant to follow and
+the server ignores it if that song is no longer on, so a second booth tab or a
+request that was slow while the DJ tapped cannot skip a song. This needs the
+booth tab open: guest phones only follow what is playing, they never drive
+it.
+
 Guests see the song docked under the ballot with a *Listen along* button.
 Browsers refuse unprompted audio, so the first song needs a tap; after that a
 change of song follows automatically. A late joiner starts partway through,

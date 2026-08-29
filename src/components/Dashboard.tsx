@@ -215,6 +215,10 @@ async function fetchWithTimeout(
   }
 }
 
+// A beat after the song ends before the next one goes on, so the room hears
+// it finish rather than being cut off by a clock that runs slightly ahead.
+const autoAdvanceGraceMs = 1500;
+
 function disposeAudio(audio: HTMLAudioElement) {
   audio.onended = null;
   audio.onerror = null;
@@ -1190,7 +1194,10 @@ export default function Dashboard({
     window.history.replaceState({}, "", window.location.pathname);
   }
 
-  async function changeNowPlaying(trackId: string | "next" | null) {
+  async function changeNowPlaying(
+    trackId: string | "next" | null,
+    fromTrackId?: string,
+  ) {
     if (!activeSessionId || !hostKey || isChangingTrack) return;
     const roomId = activeSessionId;
     setIsChangingTrack(true);
@@ -1205,7 +1212,9 @@ export default function Dashboard({
             "x-upnext-host-key": hostKey,
             Authorization: `Bearer ${accountToken}`,
           },
-          body: JSON.stringify({ trackId }),
+          body: JSON.stringify(
+            fromTrackId === undefined ? { trackId } : { trackId, fromTrackId },
+          ),
         },
       );
       const data = await readJson<{
@@ -1228,6 +1237,48 @@ export default function Dashboard({
       setIsChangingTrack(false);
     }
   }
+
+  // Auto-advance. When the song the DJ has on runs out and nothing has
+  // changed, put the crowd pick on. The booth learns the length from the
+  // file's metadata (the server never decodes audio), and the request names
+  // the song it is meant to follow, so a second booth tab or a request that
+  // was slow while the DJ tapped cannot skip one. Needs this tab open: the
+  // guest phones only follow, they never drive.
+  const changeNowPlayingRef = useRef(changeNowPlaying);
+  changeNowPlayingRef.current = changeNowPlaying;
+  const playingTrackId = session?.nowPlaying?.trackId ?? null;
+  const playingStartedAt = session?.nowPlaying?.startedAt ?? null;
+  const playingPreviewUrl = session?.nowPlaying?.previewUrl ?? null;
+  useEffect(() => {
+    if (
+      view !== "dj" ||
+      !isLive ||
+      !hostKey ||
+      !playingTrackId ||
+      !playingStartedAt ||
+      !playingPreviewUrl
+    ) {
+      return;
+    }
+    const probe = new Audio();
+    probe.preload = "metadata";
+    let timer: number | undefined;
+    probe.onloadedmetadata = () => {
+      if (!Number.isFinite(probe.duration) || probe.duration <= 0) return;
+      const endsAt =
+        Date.parse(playingStartedAt) + probe.duration * 1000 + autoAdvanceGraceMs;
+      timer = window.setTimeout(
+        () => void changeNowPlayingRef.current("next", playingTrackId),
+        Math.max(0, endsAt - Date.now()),
+      );
+    };
+    probe.src = playingPreviewUrl;
+    return () => {
+      window.clearTimeout(timer);
+      probe.onloadedmetadata = null;
+      disposeAudio(probe);
+    };
+  }, [view, isLive, hostKey, playingTrackId, playingStartedAt, playingPreviewUrl]);
 
   async function endCurrentSession() {
     if (!activeSessionId || !hostKey || isEnding) return;

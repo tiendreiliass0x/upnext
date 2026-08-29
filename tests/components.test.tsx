@@ -862,3 +862,74 @@ describe("the listen-along dock", () => {
     );
   });
 });
+
+describe("auto-advance in the booth", () => {
+  it("puts the crowd pick on when the song runs out and the DJ does nothing", async () => {
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    const room: PublicSession = {
+      id: "ABC123",
+      name: "Room",
+      venue: "",
+      createdAt: "2026-08-26T00:00:00.000Z",
+      revision: 3,
+      totalVotes: 0,
+      guestCount: 0,
+      votedTrackIds: [],
+      anonymousVoteUsed: false,
+      nowPlaying: {
+        trackId: "track-one",
+        title: "First Track",
+        artist: "Artist A",
+        previewUrl: "/api/tracks/track-one/preview",
+        // Put on a minute ago: a 30-second song is long over.
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+      tracks: [{ ...tracks[0], playedAt: "2026-08-26T00:00:00.000Z", cooldown: 2 }, tracks[1]],
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, init });
+        if (url === "/api/accounts") {
+          return Response.json({ account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" } });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({
+            activeRoom: { session: room, hostKey: "host-key" },
+            guestBaseUrl: "https://upnext.example",
+          });
+        }
+        if (url.endsWith("/now-playing")) {
+          return Response.json({
+            session: {
+              ...room,
+              revision: 4,
+              nowPlaying: { ...room.nowPlaying!, trackId: "track-two", title: "Second Track" },
+            },
+          });
+        }
+        return Response.json({ session: room });
+      }),
+    );
+    render(<Dashboard />);
+    await screen.findByText("First Track", { selector: ".now-playing-copy strong" }, { timeout: 3000 });
+
+    // The booth probes the song's metadata to learn how long it is.
+    const probe = await waitFor(() => {
+      const found = MockAudio.instances.find((audio) => audio.src === "/api/tracks/track-one/preview");
+      if (!found) throw new Error("no probe yet");
+      return found as unknown as HTMLAudioElement;
+    });
+    Object.defineProperty(probe, "duration", { configurable: true, value: 30 });
+    probe.onloadedmetadata?.(new Event("loadedmetadata"));
+
+    await screen.findByText("Second Track", { selector: ".now-playing-copy strong" });
+    const change = calls.find((call) => call.url.endsWith("/now-playing"));
+    expect(JSON.parse(String(change?.init?.body))).toEqual({
+      trackId: "next",
+      fromTrackId: "track-one",
+    });
+  });
+});
