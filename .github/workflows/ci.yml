@@ -28,7 +28,7 @@ jobs:
 
       # Node is the runtime (better-sqlite3's binding is Node-ABI); bun is only
       # the package manager. Same split as the Dockerfile.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
       - uses: oven-sh/setup-bun@v2
