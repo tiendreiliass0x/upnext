@@ -2646,36 +2646,46 @@ export function IdentityGate({
   return (
     <main className="identity-page page-shell">
       <section className="identity-intro">
+        {/* This is the landing page for a curator or DJ arriving cold, so the
+            headline sells the product and the form beside it is the way in.
+            A fan who followed a session link gets a lighter welcome. */}
         <span className="eyebrow">
           <UserRound size={14} /> {mode === "login"
             ? "Welcome back"
             : afterFreeVote
               ? "Keep voting"
               : joiningRoom
-                ? "Join the room"
-                : "Your profile"}
+                ? "Join the session"
+                : "For music curators and DJs"}
         </span>
         <h1>
           {mode === "login"
             ? "Log in by phone."
             : afterFreeVote
               ? "Your first vote is in."
-              : "Pick a name."}
+              : joiningRoom
+                ? "Pick a name."
+                : "You curate."}
           <span>
             {mode === "login"
               ? "Continue on this device."
               : afterFreeVote
                 ? "Add your phone to vote again."
-                : "Keep the phone private."}
+                : joiningRoom
+                  ? "Then bid on what plays next."
+                  : "Your fans decide what to play next."}
           </span>
         </h1>
-        <p>
-          {mode === "login"
-            ? "Enter the phone number linked to your account."
-            : afterFreeVote
-              ? "Your free vote stays in the queue. Add a private phone number and pseudonym to make another pick."
-              : "Your pseudonym is what the session sees. Your phone number is only your login and is never shown to anyone."}
-        </p>
+        {/* The headline carries the pitch; only logging in and keep-voting
+            need a line of explanation. */}
+        {mode === "login" ? (
+          <p>Enter the phone number linked to your account.</p>
+        ) : afterFreeVote ? (
+          <p>
+            Your free vote stays in the queue. Add a private phone number and
+            pseudonym to make another pick.
+          </p>
+        ) : null}
       </section>
 
       <form className="identity-form" onSubmit={submitIdentity}>

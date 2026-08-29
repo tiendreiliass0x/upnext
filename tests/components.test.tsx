@@ -65,9 +65,10 @@ describe("identity onboarding", () => {
     await waitFor(() =>
       expect(onSave).toHaveBeenCalledWith("+32 470 12 34 56", "Night Owl"),
     );
-    expect(
-      screen.getByText(/phone number is only your login/i),
-    ).toBeInTheDocument();
+    // Picking a name gets the headline alone: no explanatory line, and
+    // nothing about phone numbers beyond the field itself.
+    expect(screen.queryByText(/phone number is/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/pseudonym is what/i)).not.toBeInTheDocument();
   });
 
   it("shows account errors without leaving the form", async () => {
@@ -1218,5 +1219,26 @@ describe("fitting faces to the screen", () => {
         else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
       }
     }
+  });
+});
+
+describe("the first screen's headline", () => {
+  it("sells the product to a curator or DJ arriving cold", () => {
+    render(<IdentityGate joiningRoom={false} onSave={vi.fn()} onLogin={vi.fn()} />);
+    expect(
+      screen.getByRole("heading", {
+        level: 1,
+        name: /You curate\.\s*Your fans decide what to play next\./,
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/For music curators and DJs/)).toBeInTheDocument();
+    expect(screen.queryByText(/Pick a name/)).not.toBeInTheDocument();
+  });
+
+  it("just asks a fan who followed a session link for a name", () => {
+    render(<IdentityGate joiningRoom onSave={vi.fn()} onLogin={vi.fn()} />);
+    expect(screen.getByRole("heading", { level: 1, name: /Pick a name/ })).toBeInTheDocument();
+    expect(screen.getByText(/Join the session/)).toBeInTheDocument();
+    expect(screen.queryByText(/Your fans decide/)).not.toBeInTheDocument();
   });
 });
