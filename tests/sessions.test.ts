@@ -10,7 +10,9 @@ import {
   getSession,
   getTrackPreviewKey,
   registerAudioUpload,
+  setNowPlaying,
   toggleVote,
+  voterPreviewLimit,
 } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
@@ -380,9 +382,64 @@ describe("sessions", () => {
 
     expect(ownerRoom.session.tracks[0].previewUrl).toContain("/preview");
     expect(otherRoom.session.tracks[0].previewUrl).toBeNull();
+    // The room hears what is on air, nothing else: no key until the DJ plays it.
+    expect(getTrackPreviewKey(ownerRoom.session.tracks[0].id)).toBeNull();
+    setNowPlaying({
+      sessionId: ownerRoom.session.id,
+      hostKey: ownerRoom.hostKey,
+      accountId: owner.id,
+      trackId: ownerRoom.session.tracks[0].id,
+    });
     expect(getTrackPreviewKey(ownerRoom.session.tracks[0].id)).toBe(
       "previews/owner/sample.mp3",
     );
+    setNowPlaying({
+      sessionId: ownerRoom.session.id,
+      hostKey: ownerRoom.hostKey,
+      accountId: owner.id,
+      trackId: null,
+    });
+    expect(getTrackPreviewKey(ownerRoom.session.tracks[0].id)).toBeNull();
+  });
+
+  it("lists who voted, named first, without leaking voter identifiers", () => {
+    const host = account("+32470000090", "Host");
+    const amyr = account("+32470000091", "Amyr");
+    const nathan = account("+32470000092", "Nathan");
+    const created = room(host.id);
+    const target = created.session.tracks[0].id;
+    castAnonymousVote({ sessionId: created.session.id, trackId: target, voterId: "secret-voter" });
+    toggleVote({ sessionId: created.session.id, trackId: target, accountId: amyr.id });
+    toggleVote({ sessionId: created.session.id, trackId: target, accountId: nathan.id });
+
+    const track = getSession(created.session.id)!.tracks.find((item) => item.id === target)!;
+    expect(track.votes).toBe(3);
+    // Named faces lead; the two account votes may share a timestamp.
+    expect(track.voters.slice(0, 2).map((voter) => voter.name).sort()).toEqual(["Amyr", "Nathan"]);
+    expect(track.voters[2]).toEqual({ name: null });
+    expect(JSON.stringify(track)).not.toContain("secret-voter");
+    expect(JSON.stringify(track)).not.toContain(amyr.id);
+
+    // Votes spent by a play take their faces with them.
+    setNowPlaying({
+      sessionId: created.session.id,
+      hostKey: created.hostKey,
+      accountId: host.id,
+      trackId: target,
+    });
+    expect(getSession(created.session.id)!.tracks.find((item) => item.id === target)!.voters).toEqual([]);
+  });
+
+  it("caps the faces per row and leaves the rest to the count", () => {
+    const host = account("+32470000093", "Host");
+    const created = room(host.id);
+    const target = created.session.tracks[0].id;
+    for (let index = 0; index < voterPreviewLimit + 2; index += 1) {
+      castAnonymousVote({ sessionId: created.session.id, trackId: target, voterId: `v-${index}` });
+    }
+    const track = getSession(created.session.id)!.tracks.find((item) => item.id === target)!;
+    expect(track.votes).toBe(voterPreviewLimit + 2);
+    expect(track.voters).toHaveLength(voterPreviewLimit);
   });
 
   it("persists accounts, rooms, and votes after reopening SQLite", () => {

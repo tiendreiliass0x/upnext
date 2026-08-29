@@ -18,6 +18,9 @@ export default defineConfig({
     clearMocks: true,
     restoreMocks: true,
     fileParallelism: false,
+    // Claude Code worktrees live under .claude/; without this a checked-out
+    // worktree doubles every test file.
+    exclude: ["**/node_modules/**", "**/.claude/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary", "html"],

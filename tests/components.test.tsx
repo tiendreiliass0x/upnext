@@ -21,6 +21,7 @@ const tracks: SessionTrack[] = [
     previewUrl: "/api/tracks/track-one/preview",
     playedAt: null,
     cooldown: 0,
+    voters: [],
   },
   {
     id: "track-two",
@@ -31,31 +32,12 @@ const tracks: SessionTrack[] = [
     previewUrl: "/api/tracks/track-two/preview",
     playedAt: null,
     cooldown: 0,
+    voters: [],
   },
 ];
 
-class MockAudio {
-  static instances: MockAudio[] = [];
-
-  src: string;
-  preload = "";
-  onended: (() => void) | null = null;
-  onerror: (() => void) | null = null;
-  play = vi.fn().mockResolvedValue(undefined);
-  pause = vi.fn();
-  removeAttribute = vi.fn();
-  load = vi.fn();
-
-  constructor(src: string) {
-    this.src = src;
-    MockAudio.instances.push(this);
-  }
-}
-
 beforeEach(() => {
   window.localStorage.clear();
-  MockAudio.instances = [];
-  vi.stubGlobal("Audio", MockAudio);
 });
 
 afterEach(() => {
@@ -466,35 +448,6 @@ describe("library picker", () => {
 });
 
 describe("queue interactions", () => {
-  it("plays one preview at a time and ignores stale media events", async () => {
-    const user = userEvent.setup();
-    const { unmount } = render(<QueueList tracks={tracks} />);
-    const firstButton = screen.getByRole("button", {
-      name: /^play first track$/i,
-    });
-    const secondButton = screen.getByRole("button", {
-      name: /^play second track$/i,
-    });
-
-    await user.click(firstButton);
-    await waitFor(() => expect(firstButton).toHaveAttribute("aria-pressed", "true"));
-    const firstAudio = MockAudio.instances[0];
-    const staleError = firstAudio.onerror;
-
-    await user.click(secondButton);
-    await waitFor(() =>
-      expect(secondButton).toHaveAttribute("aria-pressed", "true"),
-    );
-    expect(firstAudio.pause).toHaveBeenCalled();
-    staleError?.();
-    expect(secondButton).toHaveAttribute("aria-pressed", "true");
-
-    const secondAudio = MockAudio.instances[1];
-    unmount();
-    expect(secondAudio.pause).toHaveBeenCalled();
-    expect(secondAudio.removeAttribute).toHaveBeenCalledWith("src");
-  });
-
   it("exposes vote count and selected state accessibly", async () => {
     const user = userEvent.setup();
     const onVote = vi.fn();
@@ -834,31 +787,44 @@ describe("the listen-along dock", () => {
     expect(screen.getByRole("button", { name: "Listen along" })).toBeDisabled();
   });
 
-  it("clears a queue row's Stop state when another player takes the audio over", async () => {
-    stubMedia();
-    const created: HTMLAudioElement[] = [];
-    vi.stubGlobal(
-      "Audio",
-      function FakeAudio(this: unknown, src?: string) {
-        const element = document.createElement("audio");
-        if (src) element.src = src;
-        created.push(element);
-        return element;
-      },
-    );
-    const user = userEvent.setup();
+  it("gives guests nothing to play: the room hears the broadcast, not the masters", () => {
     render(<QueueList tracks={tracks} />);
+    expect(screen.queryByRole("button", { name: /play/i })).not.toBeInTheDocument();
+    expect(document.querySelector("audio")).toBeNull();
+  });
+});
 
-    await user.click(screen.getByRole("button", { name: /^play first track$/i }));
-    const button = screen.getByRole("button", { name: /^stop first track$/i });
-    expect(button).toHaveAttribute("aria-pressed", "true");
+describe("the faces behind a row's votes", () => {
+  const withVoters = (voters: SessionTrack["voters"], votes: number): SessionTrack => ({
+    ...tracks[0],
+    voters,
+    votes,
+  });
 
-    // The listen-along dock claims audio and pauses this element.
-    fireEvent(created[0], new Event("pause"));
-
-    expect(screen.getByRole("button", { name: /^play first track$/i })).toHaveAttribute(
-      "aria-pressed",
-      "false",
+  it("shows an initial per named voter, a blank bubble per anonymous one, and the overflow", () => {
+    render(
+      <QueueList
+        tracks={[withVoters([{ name: "Amyr" }, { name: "Nathan Krishnan" }, { name: null }], 173)]}
+      />,
     );
+    const stack = screen.getByLabelText("Voted by Amyr, Nathan Krishnan and 171 others");
+    expect(within(stack).getByTitle("Amyr")).toHaveTextContent("A");
+    expect(within(stack).getByTitle("Nathan Krishnan")).toHaveTextContent("N");
+    expect(within(stack).getByTitle("Guest")).toBeInTheDocument();
+    expect(within(stack).getByText("+170")).toBeInTheDocument();
+    expect(within(stack).getByText("Amyr, Nathan Krishnan and 171 others")).toBeInTheDocument();
+  });
+
+  it("reads naturally for the small cases", () => {
+    const { rerender } = render(<QueueList tracks={[withVoters([{ name: "Amyr" }], 1)]} />);
+    expect(screen.getByText("Amyr")).toBeInTheDocument();
+    rerender(<QueueList tracks={[withVoters([{ name: "Amyr" }, { name: "Nathan" }], 2)]} />);
+    expect(screen.getByText("Amyr and Nathan")).toBeInTheDocument();
+    rerender(<QueueList tracks={[withVoters([{ name: "Amyr" }, { name: null }], 2)]} />);
+    expect(screen.getByText("Amyr and 1 other")).toBeInTheDocument();
+    rerender(<QueueList tracks={[withVoters([{ name: null }], 1)]} />);
+    expect(screen.getByText("1 guest voted")).toBeInTheDocument();
+    rerender(<QueueList tracks={[withVoters([], 0)]} />);
+    expect(screen.queryByText(/voted/)).not.toBeInTheDocument();
   });
 });

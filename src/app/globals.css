@@ -566,6 +566,63 @@ button:active:not(:disabled) {
   font-size: 11px;
 }
 
+.voter-stack {
+  min-width: 0;
+  margin-top: 2px;
+  display: flex;
+  /* On a phone the sentence drops under the faces instead of being cut. */
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 7px;
+}
+
+.voter-faces {
+  flex: none;
+  display: flex;
+}
+
+.voter-face {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  /* Ring in the row colour so overlapping faces read as separate. */
+  box-shadow: 0 0 0 2px var(--surface);
+  background: hsl(var(--face-hue) 62% 44%);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.voter-face + .voter-face {
+  margin-left: -6px;
+}
+
+.voter-face.is-anonymous {
+  background: color-mix(in srgb, var(--muted) 55%, var(--surface));
+  color: var(--ink);
+}
+
+.voter-face.is-more {
+  background: var(--line);
+  color: var(--ink);
+  font-size: 8px;
+}
+
+.queue-list li.is-leading .voter-face {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, var(--surface));
+}
+
+.voter-stack small {
+  color: var(--muted);
+  font-size: 11px;
+  /* Names are the point; two lines beat "Nathan Krishnan and 5 …". */
+  white-space: normal;
+  overflow: visible;
+}
+
 .remove-track {
   width: 44px;
   height: 44px;
@@ -914,27 +971,6 @@ button:active:not(:disabled) {
   border-radius: 10px;
   background: var(--surface-strong);
   color: var(--ink-inverse);
-}
-
-.preview-play {
-  border: 0;
-  cursor: pointer;
-  transition: background-color 160ms ease, color 160ms ease,
-    transform 160ms ease;
-}
-
-.preview-play:hover,
-.preview-play[aria-pressed="true"] {
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-
-.preview-loader {
-  width: 13px;
-  height: 13px;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  border-radius: 50%;
 }
 
 .is-leading .queue-rank {
@@ -1456,10 +1492,6 @@ button:active:not(:disabled) {
     animation: level-pulse 900ms ease-in-out infinite alternate;
   }
 
-  .preview-loader {
-    animation: preview-spin 700ms linear infinite;
-  }
-
   .loading-mark span:nth-child(2) { animation-delay: 120ms; }
   .loading-mark span:nth-child(3) { animation-delay: 240ms; }
 }
@@ -1478,10 +1510,6 @@ button:active:not(:disabled) {
 @keyframes level-pulse {
   from { opacity: 0.45; transform: scaleY(0.72); }
   to { opacity: 1; transform: scaleY(1); }
-}
-
-@keyframes preview-spin {
-  to { transform: rotate(360deg); }
 }
 
 /* Guest-link reachability notices in the live room. A private LAN address is a

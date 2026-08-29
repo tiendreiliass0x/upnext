@@ -21,6 +21,7 @@ import {
   endSession,
   getAudioUploadByRequest,
   registerAudioUpload,
+  setNowPlaying,
 } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
@@ -172,7 +173,7 @@ describe("preview API", () => {
     );
   });
 
-  it("redirects active previews and rejects them after room end", async () => {
+  it("serves the song on air, and only that one, until the room ends", async () => {
     const account = createAccount({
       phone: "+32470000043",
       pseudonym: "Preview Host",
@@ -191,6 +192,19 @@ describe("preview API", () => {
     });
     const trackId = created.session.tracks[0].id;
 
+    // Not on air yet: nothing to hear, whatever URL a guest constructs.
+    const offAir = await getPreview(new Request("http://localhost"), {
+      params: Promise.resolve({ id: trackId }),
+    });
+    expect(offAir.status).toBe(404);
+    expect(mediaMocks.getPreviewUrl).not.toHaveBeenCalled();
+
+    setNowPlaying({
+      sessionId: created.session.id,
+      hostKey: created.hostKey,
+      accountId: account.id,
+      trackId,
+    });
     const response = await getPreview(new Request("http://localhost"), {
       params: Promise.resolve({ id: trackId }),
     });
