@@ -892,3 +892,185 @@ describe("the faces behind a row's votes", () => {
     expect(screen.queryByText(/voted/)).not.toBeInTheDocument();
   });
 });
+
+describe("auto-advance in the booth", () => {
+  it("puts the crowd pick on when the song runs out and the DJ does nothing", async () => {
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    const room: PublicSession = {
+      id: "ABC123",
+      name: "Room",
+      venue: "",
+      createdAt: "2026-08-26T00:00:00.000Z",
+      revision: 3,
+      totalVotes: 0,
+      guestCount: 0,
+      votedTrackIds: [],
+      anonymousVoteUsed: false,
+      nowPlaying: {
+        trackId: "track-one",
+        title: "First Track",
+        artist: "Artist A",
+        previewUrl: "/api/tracks/track-one/preview",
+        // Put on a minute ago: a 30-second song is long over.
+        startedAt: new Date(Date.now() - 60_000).toISOString(),
+      },
+      tracks: [{ ...tracks[0], playedAt: "2026-08-26T00:00:00.000Z", cooldown: 2 }, tracks[1]],
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, init });
+        if (url === "/api/accounts") {
+          return Response.json({ account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" } });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({
+            activeRoom: { session: room, hostKey: "host-key" },
+            guestBaseUrl: "https://upnext.example",
+          });
+        }
+        if (url.endsWith("/now-playing")) {
+          return Response.json({
+            session: {
+              ...room,
+              revision: 4,
+              nowPlaying: { ...room.nowPlaying!, trackId: "track-two", title: "Second Track" },
+            },
+          });
+        }
+        return Response.json({ session: room });
+      }),
+    );
+    // jsdom's <audio> never loads anything; a bare element is enough to
+    // capture the probe and hand it a duration.
+    const created: HTMLAudioElement[] = [];
+    vi.stubGlobal(
+      "Audio",
+      function FakeAudio(this: unknown, src?: string) {
+        const element = document.createElement("audio");
+        if (src) element.src = src;
+        created.push(element);
+        return element;
+      },
+    );
+    render(<Dashboard />);
+    await screen.findByText("First Track", { selector: ".now-playing-copy strong" }, { timeout: 3000 });
+
+    // The booth probes the song's metadata to learn how long it is.
+    const probe = await waitFor(() => {
+      const found = created.find((audio) => audio.src.endsWith("/api/tracks/track-one/preview"));
+      if (!found) throw new Error("no probe yet");
+      return found;
+    });
+    Object.defineProperty(probe, "duration", { configurable: true, value: 30 });
+    probe.onloadedmetadata?.(new Event("loadedmetadata"));
+
+    await screen.findByText("Second Track", { selector: ".now-playing-copy strong" });
+    const change = calls.find((call) => call.url.endsWith("/now-playing"));
+    expect(JSON.parse(String(change?.init?.body))).toEqual({
+      trackId: "next",
+      fromTrackId: "track-one",
+    });
+  });
+});
+
+describe("auto-advance timing", () => {
+  function mountBooth(options: { startedSecondsAgo: number; serverDate?: Date }) {
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    const room: PublicSession = {
+      id: "ABC123",
+      name: "Room",
+      venue: "",
+      createdAt: "2026-08-26T00:00:00.000Z",
+      revision: 3,
+      totalVotes: 0,
+      guestCount: 0,
+      votedTrackIds: [],
+      anonymousVoteUsed: false,
+      nowPlaying: {
+        trackId: "track-one",
+        title: "First Track",
+        artist: "Artist A",
+        previewUrl: "/api/tracks/track-one/preview",
+        startedAt: new Date(Date.now() - options.startedSecondsAgo * 1000).toISOString(),
+      },
+      tracks: [{ ...tracks[0], playedAt: "2026-08-26T00:00:00.000Z", cooldown: 2 }, tracks[1]],
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const headers: Record<string, string> = options.serverDate
+      ? { date: options.serverDate.toUTCString() }
+      : {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, init });
+        if (url === "/api/accounts") {
+          return Response.json({ account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" } });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({
+            activeRoom: { session: room, hostKey: "host-key" },
+            guestBaseUrl: "https://upnext.example",
+          });
+        }
+        if (url.endsWith("/now-playing")) return Response.json({ session: room });
+        return Response.json({ session: room }, { headers });
+      }),
+    );
+    const created: HTMLAudioElement[] = [];
+    vi.stubGlobal(
+      "Audio",
+      function FakeAudio(this: unknown, src?: string) {
+        const element = document.createElement("audio");
+        if (src) element.src = src;
+        created.push(element);
+        return element;
+      },
+    );
+    render(<Dashboard />);
+    return {
+      calls,
+      async probe() {
+        await screen.findByText("First Track", { selector: ".now-playing-copy strong" }, { timeout: 3000 });
+        return waitFor(() => {
+          const found = created.find((audio) => audio.src.endsWith("/api/tracks/track-one/preview"));
+          if (!found) throw new Error("no probe yet");
+          return found;
+        });
+      },
+      advances: () => calls.filter((call) => call.url.endsWith("/now-playing")),
+    };
+  }
+
+  it("waits while the song is still going", async () => {
+    const booth = mountBooth({ startedSecondsAgo: 5 });
+    const probe = await booth.probe();
+    Object.defineProperty(probe, "duration", { configurable: true, value: 30 });
+    probe.onloadedmetadata?.(new Event("loadedmetadata"));
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(booth.advances()).toHaveLength(0);
+  });
+
+  it("trusts the server's clock over the booth's", async () => {
+    // By the booth's clock the song ended a minute ago; the server says it
+    // started only just now (its Date header runs two minutes behind).
+    const booth = mountBooth({
+      startedSecondsAgo: 60,
+      serverDate: new Date(Date.now() - 120_000),
+    });
+    const probe = await booth.probe();
+    // Let a poll land so the offset is learned before the length arrives.
+    await waitFor(() =>
+      expect(booth.calls.some((call) => call.url.startsWith("/api/sessions/ABC123"))).toBe(true),
+    );
+    Object.defineProperty(probe, "duration", { configurable: true, value: 30 });
+    probe.onloadedmetadata?.(new Event("loadedmetadata"));
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(booth.advances()).toHaveLength(0);
+  });
+});

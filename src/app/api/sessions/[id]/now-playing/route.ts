@@ -15,13 +15,24 @@ export async function POST(
   }
 
   let trackId: string | "next" | null;
+  let fromTrackId: string | null | undefined;
   try {
-    const body = (await request.json()) as { trackId?: unknown };
+    const body = (await request.json()) as {
+      trackId?: unknown;
+      fromTrackId?: unknown;
+    };
     if (body.trackId === null) trackId = null;
     else if (body.trackId === "next") trackId = "next";
     else if (typeof body.trackId === "string" && body.trackId.length <= 100) {
       trackId = body.trackId;
     } else {
+      return NextResponse.json({ error: "Choose a track." }, { status: 400 });
+    }
+    if (body.fromTrackId === null) fromTrackId = null;
+    else if (typeof body.fromTrackId === "string" && body.fromTrackId.length <= 100) {
+      fromTrackId = body.fromTrackId;
+    } else if (body.fromTrackId !== undefined) {
+      // A guard that cannot be read must not silently become no guard.
       return NextResponse.json({ error: "Choose a track." }, { status: 400 });
     }
   } catch {
@@ -33,7 +44,13 @@ export async function POST(
     hostKey: request.headers.get("x-upnext-host-key") ?? "",
     accountId: account.id,
     trackId,
+    fromTrackId,
   });
+  // The song this change was meant to follow is no longer on: someone else
+  // already moved the room along. Nothing to do, and nothing went wrong.
+  if (result === "stale") {
+    return NextResponse.json({ session: getSession(id, account.id), stale: true });
+  }
 
   if (result === "forbidden") {
     return NextResponse.json(

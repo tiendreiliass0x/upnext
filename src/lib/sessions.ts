@@ -86,13 +86,25 @@ export function cooldownMessage(songsRemaining: number) {
 }
 
 // Songs played after this one, capped at the cooldown. Only tracks in the
-// same room count, and only plays later than this track's own last play.
+// same room count, and only plays later than this track's own last play. A
+// room smaller than the cooldown shortens it to what can actually roll, so a
+// two-track room cools for one song and a one-track room never does — the
+// message "try again after N more songs" is then always something that can
+// come true.
 const trackCooldownSql = `
-  CASE WHEN t.played_at IS NULL THEN 0 ELSE MAX(0, ${cooldownSongs} - (
+  CASE WHEN t.played_at IS NULL THEN 0 ELSE MAX(0, MIN(${cooldownSongs},
+    (SELECT COUNT(*) FROM tracks n WHERE n.session_id = t.session_id) - 1
+  ) - (
     SELECT COUNT(*) FROM tracks o
     WHERE o.session_id = t.session_id
       AND o.played_at IS NOT NULL AND o.played_at > t.played_at
   )) END`;
+
+// Among open songs: most live votes first, then never-played before replayed
+// (a reopened song comes back at zero votes and must not shadow songs that
+// have not had their turn), then the one that played longest ago, then the
+// DJ's order. The ballot and the crowd pick share this so they agree.
+const pickOrderSql = `votes DESC, (t.played_at IS NOT NULL) ASC, t.played_at ASC, t.position ASC`;
 
 // Votes cast since the track last played. Earlier ones were spent by that
 // play; the rows stay so a guest's free vote remains used and history is kept.
@@ -134,6 +146,16 @@ function getTrackVoters(sessionId: string) {
     voters.set(row.track_id, list);
   }
   return voters;
+}
+
+// A vote only counts if it is stamped after the song's last play, and play
+// stamps can sit a few milliseconds ahead of the clock (see setNowPlaying),
+// so a vote cast right after a play is stepped past it rather than lost.
+function voteStamp(playedAt: string | null) {
+  const now = new Date().toISOString();
+  return playedAt && playedAt >= now
+    ? new Date(Date.parse(playedAt) + 1).toISOString()
+    : now;
 }
 
 function trackPreviewUrl(trackId: string, previewKey: string | null) {
@@ -192,7 +214,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
          ${liveVotesJoinSql}
          WHERE t.session_id = ?
          GROUP BY t.id
-         ORDER BY ((${trackCooldownSql}) > 0) ASC, votes DESC, t.position ASC`,
+         ORDER BY ((${trackCooldownSql}) > 0) ASC, ${pickOrderSql}`,
       )
       .all(session.id, session.id, session.id) as TrackRow[];
     const totals = database
@@ -212,11 +234,16 @@ function getPublicSession(sessionId: string, accountId?: string) {
       guest_count: number;
     };
     const voters = getTrackVoters(session.id);
+    // Only votes cast since the track last played: an older one was spent by
+    // that play and the account is free to vote the song back up.
     const votedTrackIds = accountId
       ? (
           database
             .prepare(
-              "SELECT track_id FROM votes WHERE session_id = ? AND account_id = ?",
+              `SELECT v.track_id FROM votes v
+               JOIN tracks t ON t.id = v.track_id
+               WHERE v.session_id = ? AND v.account_id = ?
+                 AND v.created_at > COALESCE(t.played_at, '')`,
             )
             .all(session.id, accountId) as Array<{ track_id: string }>
         ).map((vote) => vote.track_id)
@@ -374,14 +401,13 @@ export function getSessionRevision(id: string) {
 export function getAnonymousSession(id: string, voterId: string) {
   const session = getPublicSession(id);
   if (!session) return null;
-  const votedTrackIds = (
-    getDatabase()
-      .prepare(
-        `SELECT track_id FROM anonymous_votes
-         WHERE session_id = ? AND voter_id = ?`,
-      )
-      .all(session.id, voterId) as Array<{ track_id: string }>
-  ).map((vote) => vote.track_id);
+  const rows = getDatabase()
+    .prepare(
+      `SELECT v.track_id, v.created_at > COALESCE(t.played_at, '') AS live
+       FROM anonymous_votes v JOIN tracks t ON t.id = v.track_id
+       WHERE v.session_id = ? AND v.voter_id = ?`,
+    )
+    .all(session.id, voterId) as Array<{ track_id: string; live: number }>;
   const claimed = Boolean(
     getDatabase()
       .prepare("SELECT 1 FROM voter_accounts WHERE voter_id = ?")
@@ -389,8 +415,10 @@ export function getAnonymousSession(id: string, voterId: string) {
   );
   return {
     ...session,
-    votedTrackIds,
-    anonymousVoteUsed: claimed || votedTrackIds.length > 0,
+    // The free vote stays used once cast; it only shows as a live pick while
+    // the song has not played since, so the guest can re-tap it afterwards.
+    votedTrackIds: rows.filter((row) => row.live).map((row) => row.track_id),
+    anonymousVoteUsed: claimed || rows.length > 0,
   };
 }
 
@@ -458,6 +486,12 @@ export function setNowPlaying(input: {
   hostKey: string;
   accountId: string;
   trackId: string | "next" | null;
+  /**
+   * Only change if this is still what is playing (null: nothing is). Set by
+   * the booth's auto-advance so a second booth tab, or a request that was
+   * slow while the DJ tapped, cannot skip a song.
+   */
+  fromTrackId?: string | null;
 }) {
   const database = getDatabase();
   return database
@@ -465,11 +499,16 @@ export function setNowPlaying(input: {
       const now = new Date().toISOString();
       const session = database
         .prepare(
-          `SELECT id, host_key, host_account_id FROM sessions
+          `SELECT id, host_key, host_account_id, now_playing_track_id FROM sessions
            WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
         )
         .get(input.sessionId.toUpperCase(), now) as
-        | { id: string; host_key: string; host_account_id: string }
+        | {
+            id: string;
+            host_key: string;
+            host_account_id: string;
+            now_playing_track_id: string | null;
+          }
         | undefined;
       if (!session) return "not_found" as const;
       if (
@@ -478,20 +517,36 @@ export function setNowPlaying(input: {
       ) {
         return "forbidden" as const;
       }
+      if (
+        input.fromTrackId !== undefined &&
+        session.now_playing_track_id !== input.fromTrackId
+      ) {
+        return "stale" as const;
+      }
 
       let trackId: string | null = null;
       if (input.trackId === "next") {
-        const next = database
-          .prepare(
-            `SELECT t.id, COUNT(v.track_id) AS votes
-             FROM tracks t
-             ${liveVotesJoinSql}
-             WHERE t.session_id = ? AND (${trackCooldownSql}) = 0
-             GROUP BY t.id
-             ORDER BY votes DESC, t.position ASC
-             LIMIT 1`,
-          )
-          .get(session.id, session.id, session.id) as { id: string } | undefined;
+        const next =
+          (database
+            .prepare(
+              `SELECT t.id, COUNT(v.track_id) AS votes
+               FROM tracks t
+               ${liveVotesJoinSql}
+               WHERE t.session_id = ? AND (${trackCooldownSql}) = 0
+               GROUP BY t.id
+               ORDER BY ${pickOrderSql}
+               LIMIT 1`,
+            )
+            .get(session.id, session.id, session.id) as { id: string } | undefined) ??
+          // Nothing open (only possible in a room too small to cool down):
+          // the least recently played song rather than dead air.
+          (database
+            .prepare(
+              `SELECT id FROM tracks WHERE session_id = ?
+               ORDER BY (played_at IS NOT NULL) ASC, played_at ASC, position ASC
+               LIMIT 1`,
+            )
+            .get(session.id) as { id: string } | undefined);
         if (!next) return "no_track" as const;
         trackId = next.id;
       } else if (input.trackId) {
@@ -514,11 +569,9 @@ export function setNowPlaying(input: {
           latest && latest >= now
             ? new Date(Date.parse(latest) + 1).toISOString()
             : now;
+        // Every vote on it is spent from this stamp on: rows stay for the
+        // room's totals, but only votes cast after it count or show as picks.
         database.prepare("UPDATE tracks SET played_at = ? WHERE id = ?").run(stamp, trackId);
-        // Spent. Account votes go so the same people can vote it back after
-        // the cooldown; anonymous rows stay (one free vote per room) but stop
-        // counting from this moment.
-        database.prepare("DELETE FROM votes WHERE track_id = ?").run(trackId);
       }
       database
         .prepare(
@@ -554,17 +607,22 @@ export function toggleVote(input: {
 
       const track = database
         .prepare(
-          `SELECT t.id, ${trackCooldownSql} AS cooldown
+          `SELECT t.id, t.played_at, ${trackCooldownSql} AS cooldown
            FROM tracks t WHERE t.id = ? AND t.session_id = ?`,
         )
         .get(input.trackId, session.id) as
-        | { id: string; cooldown: number }
+        | { id: string; played_at: string | null; cooldown: number }
         | undefined;
       if (!track) return null;
 
+      // A vote from before the song last played was spent by that play; it
+      // counts as no vote here so the same account can vote it back up.
       const existingVote = database
-        .prepare("SELECT 1 FROM votes WHERE track_id = ? AND account_id = ?")
-        .get(track.id, input.accountId);
+        .prepare(
+          `SELECT 1 FROM votes WHERE track_id = ? AND account_id = ?
+             AND created_at > COALESCE(?, '')`,
+        )
+        .get(track.id, input.accountId, track.played_at);
       const voted = input.enabled ?? !existingVote;
       const changed = voted !== Boolean(existingVote);
       // A song on cooldown is off the ballot for now. Taking a vote back off
@@ -577,9 +635,11 @@ export function toggleVote(input: {
         database
           .prepare(
             `INSERT INTO votes (track_id, session_id, account_id, created_at)
-             VALUES (?, ?, ?, ?)`,
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT (track_id, account_id)
+             DO UPDATE SET created_at = excluded.created_at`,
           )
-          .run(track.id, session.id, input.accountId, new Date().toISOString());
+          .run(track.id, session.id, input.accountId, voteStamp(track.played_at));
       } else if (changed) {
         database
           .prepare("DELETE FROM votes WHERE track_id = ? AND account_id = ?")
@@ -619,11 +679,11 @@ export function castAnonymousVote(input: {
 
       const track = database
         .prepare(
-          `SELECT t.id, ${trackCooldownSql} AS cooldown
+          `SELECT t.id, t.played_at, ${trackCooldownSql} AS cooldown
            FROM tracks t WHERE t.id = ? AND t.session_id = ?`,
         )
         .get(input.trackId, session.id) as
-        | { id: string; cooldown: number }
+        | { id: string; played_at: string | null; cooldown: number }
         | undefined;
       if (!track) return { status: "not_found" as const };
       // The one free vote must not land on a song that is sitting out.
@@ -638,14 +698,30 @@ export function castAnonymousVote(input: {
 
       const existing = database
         .prepare(
-          `SELECT track_id FROM anonymous_votes
+          `SELECT track_id, created_at FROM anonymous_votes
            WHERE session_id = ? AND voter_id = ?`,
         )
-        .get(session.id, input.voterId) as { track_id: string } | undefined;
+        .get(session.id, input.voterId) as
+        | { track_id: string; created_at: string }
+        | undefined;
       if (existing) {
-        return existing.track_id === track.id
-          ? { status: "voted" as const, sessionId: session.id }
-          : { status: "phone_required" as const };
+        if (existing.track_id !== track.id) {
+          return { status: "phone_required" as const };
+        }
+        // Same song again. If the earlier tap was spent by a play, this one
+        // is a fresh vote and has to count; otherwise it is a harmless repeat.
+        if (existing.created_at <= (track.played_at ?? "")) {
+          database
+            .prepare(
+              `UPDATE anonymous_votes SET created_at = ?
+               WHERE session_id = ? AND voter_id = ?`,
+            )
+            .run(voteStamp(track.played_at), session.id, input.voterId);
+          database
+            .prepare("UPDATE sessions SET revision = revision + 1 WHERE id = ?")
+            .run(session.id);
+        }
+        return { status: "voted" as const, sessionId: session.id };
       }
 
       database
@@ -654,7 +730,7 @@ export function castAnonymousVote(input: {
             (track_id, session_id, voter_id, created_at)
            VALUES (?, ?, ?, ?)`,
         )
-        .run(track.id, session.id, input.voterId, new Date().toISOString());
+        .run(track.id, session.id, input.voterId, voteStamp(track.played_at));
       database
         .prepare("UPDATE sessions SET revision = revision + 1 WHERE id = ?")
         .run(session.id);
