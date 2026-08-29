@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
@@ -29,7 +29,7 @@ import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import { readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import type { NowPlaying } from "@/lib/sessions";
-import type { PublicSession, SessionTrack } from "@/lib/sessions";
+import type { PublicSession, SessionTrack, TrackVoter } from "@/lib/sessions";
 
 type AppView = "dj" | "guest";
 
@@ -1324,6 +1324,7 @@ export default function Dashboard({
       previewUrl: null,
       playedAt: null,
       cooldown: 0,
+      voters: [],
     })),
   };
   const guestDockVisible =
@@ -2190,6 +2191,59 @@ function GuestRoom({
   );
 }
 
+// Deterministic so a pseudonym keeps its colour across rows and reloads.
+function voterHue(name: string) {
+  let hash = 0;
+  for (const char of name) hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+  return hash % 360;
+}
+
+function voterSummary(voters: TrackVoter[], votes: number) {
+  const names = voters.flatMap((voter) => (voter.name ? [voter.name] : []));
+  const shown = names.slice(0, 2);
+  const others = votes - shown.length;
+  if (shown.length === 0) {
+    return votes === 1 ? "1 guest voted" : `${votes} guests voted`;
+  }
+  if (others <= 0) return shown.join(" and ");
+  return `${shown.join(", ")} and ${others} other${others === 1 ? "" : "s"}`;
+}
+
+/**
+ * The faces behind a row's votes: an initial for each named voter, a blank
+ * bubble for a free anonymous vote, then "A, B and N others". Voting is the
+ * social act in the room, so who's in on a song should be visible, not just
+ * a number.
+ */
+function VoterStack({ voters, votes }: { voters: TrackVoter[]; votes: number }) {
+  if (votes === 0) return null;
+  const hidden = votes - voters.length;
+  return (
+    <span className="voter-stack" aria-label={`Voted by ${voterSummary(voters, votes)}`}>
+      <span className="voter-faces" aria-hidden="true">
+        {voters.map((voter, index) =>
+          voter.name ? (
+            <span
+              key={index}
+              className="voter-face"
+              style={{ "--face-hue": voterHue(voter.name) } as CSSProperties}
+              title={voter.name}
+            >
+              {voter.name.slice(0, 1).toUpperCase()}
+            </span>
+          ) : (
+            <span key={index} className="voter-face is-anonymous" title="Guest">
+              <UserRound size={11} strokeWidth={2.4} />
+            </span>
+          ),
+        )}
+        {hidden > 0 && <span className="voter-face is-more">+{hidden}</span>}
+      </span>
+      <small>{voterSummary(voters, votes)}</small>
+    </span>
+  );
+}
+
 type QueueListProps = {
   tracks: SessionTrack[];
   interactive?: boolean;
@@ -2207,67 +2261,6 @@ export function QueueList({
   lockSelectedVotes = false,
   onVote,
 }: QueueListProps) {
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [playingTrackId, setPlayingTrackId] = useState("");
-  const [loadingTrackId, setLoadingTrackId] = useState("");
-
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) disposeAudio(audioRef.current);
-      audioRef.current = null;
-    };
-  }, []);
-
-  async function togglePreview(track: SessionTrack) {
-    if (!track.previewUrl) return;
-
-    if (playingTrackId === track.id || loadingTrackId === track.id) {
-      if (audioRef.current) disposeAudio(audioRef.current);
-      audioRef.current = null;
-      setPlayingTrackId("");
-      setLoadingTrackId("");
-      return;
-    }
-
-    if (audioRef.current) disposeAudio(audioRef.current);
-    const audio = new Audio(track.previewUrl);
-    audio.preload = "none";
-    audioRef.current = audio;
-    setLoadingTrackId(track.id);
-    audio.onended = () => {
-      if (audioRef.current === audio) {
-        audioRef.current = null;
-        setPlayingTrackId("");
-      }
-    };
-    audio.onerror = () => {
-      if (audioRef.current === audio) {
-        audioRef.current = null;
-        setLoadingTrackId("");
-        setPlayingTrackId("");
-      }
-    };
-    // The DJ's dock can pause this one when it takes over; the row must not
-    // keep showing Stop for something that is no longer playing.
-    audio.onpause = () => {
-      if (audioRef.current === audio) setPlayingTrackId("");
-    };
-
-    try {
-      claimAudio(audio);
-      await audio.play();
-      if (audioRef.current === audio) setPlayingTrackId(track.id);
-    } catch {
-      if (audioRef.current === audio) {
-        disposeAudio(audio);
-        audioRef.current = null;
-        setPlayingTrackId("");
-      }
-    } finally {
-      if (audioRef.current === audio) setLoadingTrackId("");
-    }
-  }
-
   return (
     <ol className="queue-list">
       {tracks.map((track, index) => {
@@ -2282,27 +2275,9 @@ export function QueueList({
             className={`${index === 0 && !cooling ? "is-leading" : ""}${cooling ? " is-played" : ""}`}
           >
             <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
-            {track.previewUrl ? (
-              <button
-                type="button"
-                className="queue-art preview-play"
-                onClick={() => void togglePreview(track)}
-                aria-label={`${playingTrackId === track.id ? "Stop" : "Play"} ${track.title}`}
-                aria-pressed={playingTrackId === track.id}
-              >
-                {loadingTrackId === track.id ? (
-                  <span className="preview-loader" aria-hidden="true" />
-                ) : playingTrackId === track.id ? (
-                  <Pause size={17} fill="currentColor" />
-                ) : (
-                  <Play size={17} fill="currentColor" />
-                )}
-              </button>
-            ) : (
-              <span className="queue-art" aria-hidden="true">
-                <AudioLines size={20} strokeWidth={1.7} />
-              </span>
-            )}
+            <span className="queue-art" aria-hidden="true">
+              <AudioLines size={20} strokeWidth={1.7} />
+            </span>
             <span className="track-copy">
               <strong>{track.title}</strong>
               <small>
@@ -2313,6 +2288,7 @@ export function QueueList({
                     ? " · played"
                     : ""}
               </small>
+              <VoterStack voters={track.voters} votes={track.votes} />
             </span>
             {interactive ? (
               <button

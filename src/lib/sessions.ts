@@ -10,7 +10,17 @@ export type SessionTrack = {
   playedAt: string | null;
   /** Songs that still have to roll before this one can be voted for again. */
   cooldown: number;
+  /**
+   * Who is behind the live votes, newest named voters first, capped at
+   * voterPreviewLimit. `votes` minus this length is the "and N others".
+   */
+  voters: TrackVoter[];
 };
+
+/** A pseudonym when the voter has an account; null for a free anonymous vote. */
+export type TrackVoter = { name: string | null };
+
+export const voterPreviewLimit = 5;
 
 export type NowPlaying = {
   trackId: string;
@@ -93,6 +103,39 @@ const liveVotesJoinSql = `
     SELECT track_id, created_at FROM anonymous_votes WHERE session_id = ?
   ) v ON v.track_id = t.id AND v.created_at > COALESCE(t.played_at, '')`;
 
+type VoterRow = { track_id: string; name: string | null };
+
+// The faces on each row. Named voters come first — anonymous voters are all
+// the same blank bubble, so five of them would tell the room nothing — and
+// nothing that identifies a voter beyond the pseudonym they chose to show
+// leaves the server: no account IDs, and never the anonymous voter ID, which
+// is what entitles a browser to its free vote.
+function getTrackVoters(sessionId: string) {
+  const rows = getDatabase()
+    .prepare(
+      `SELECT v.track_id, v.name
+       FROM (
+         SELECT vo.track_id, vo.created_at, a.pseudonym AS name
+         FROM votes vo JOIN accounts a ON a.id = vo.account_id
+         WHERE vo.session_id = ?
+         UNION ALL
+         SELECT av.track_id, av.created_at, NULL AS name
+         FROM anonymous_votes av WHERE av.session_id = ?
+       ) v
+       JOIN tracks t ON t.id = v.track_id
+       WHERE v.created_at > COALESCE(t.played_at, '')
+       ORDER BY v.track_id, (v.name IS NULL) ASC, v.created_at DESC`,
+    )
+    .all(sessionId, sessionId) as VoterRow[];
+  const voters = new Map<string, TrackVoter[]>();
+  for (const row of rows) {
+    const list = voters.get(row.track_id) ?? [];
+    if (list.length < voterPreviewLimit) list.push({ name: row.name });
+    voters.set(row.track_id, list);
+  }
+  return voters;
+}
+
 function trackPreviewUrl(trackId: string, previewKey: string | null) {
   return previewKey ? `/api/tracks/${encodeURIComponent(trackId)}/preview` : null;
 }
@@ -168,6 +211,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
       total_votes: number;
       guest_count: number;
     };
+    const voters = getTrackVoters(session.id);
     const votedTrackIds = accountId
       ? (
           database
@@ -211,6 +255,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
         previewUrl: trackPreviewUrl(track.id, track.preview_key),
         playedAt: track.played_at,
         cooldown: track.cooldown,
+        voters: voters.get(track.id) ?? [],
       })),
     } satisfies PublicSession;
   })();
@@ -667,6 +712,11 @@ export function getAudioUploadByRequest(accountId: string, requestId: string) {
   return row?.object_key ?? null;
 }
 
+/**
+ * Audio for a room track is served only while the DJ has that track on: the
+ * room listens to what is being broadcast, it does not browse the masters.
+ * Anything else a guest could construct from the payload gets a 404.
+ */
 export function getTrackPreviewKey(trackId: string) {
   const row = getDatabase()
     .prepare(
@@ -674,6 +724,7 @@ export function getTrackPreviewKey(trackId: string) {
        FROM tracks t
        JOIN sessions s ON s.id = t.session_id
        WHERE t.id = ? AND t.preview_key IS NOT NULL
+         AND s.now_playing_track_id = t.id
          AND s.ended_at IS NULL AND s.expires_at > ?`,
     )
     .get(trackId, new Date().toISOString()) as

@@ -19,6 +19,7 @@ export default defineConfig([
     },
   },
   globalIgnores([
+    ".claude/**",
     "node_modules/**",
     ".next/**",
     "out/**",
