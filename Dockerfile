@@ -5,24 +5,28 @@
 # binary that cannot run in this image.
 #
 # Every stage is a Node image with the bun binary copied in, rather than the
-# bun image itself. bun is the package manager (bun.lock is the lockfile) but
-# it reports itself as node v26, so inside oven/bun the better-sqlite3 install
-# script looks for a prebuild that does not exist and falls back to compiling
-# against the wrong ABI. With real Node present, prebuild-install resolves the
-# Node 22 prebuild that matches the runtime below.
-#
-# Node is also the only possible runtime here: bun cannot load better-sqlite3's
-# native binding at all.
+# bun image itself. bun is the package manager (bun.lock is the lockfile);
+# Node is the runtime, because the standalone server Next emits is a Node
+# program and the cleanup job runs under Node too. Installing, building and
+# running on one Node major keeps every stage on the runtime that ships.
+# (better-sqlite3 13 is N-API and carries its prebuilt bindings inside the
+# package, so the install no longer depends on which runtime runs it; the
+# single-Node-image layout stays for the reason above, not for the binding.)
 
 FROM oven/bun:1.4.0 AS bunbin
 
-FROM node:22-slim AS deps
+FROM node:24-slim AS deps
 COPY --from=bunbin /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
 COPY package.json bun.lock ./
-RUN bun install --frozen-lockfile
+# --ignore-scripts: better-sqlite3 13 ships its prebuilt bindings in the
+# package and has no install script, but bun sees its binding.gyp and runs
+# node-gyp anyway (ignoring the package's gypfile: false), which needs Python
+# and fails on this slim image. Nothing in the image needs a lifecycle script:
+# the platform binaries all arrive as optional dependencies.
+RUN bun install --frozen-lockfile --ignore-scripts
 
-FROM node:22-slim AS build
+FROM node:24-slim AS build
 COPY --from=bunbin /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
@@ -38,7 +42,7 @@ RUN bun run build
 RUN bun build scripts/cleanup.ts --target=node --outfile=cleanup.mjs \
       --external better-sqlite3
 
-FROM node:22-slim AS runtime
+FROM node:24-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

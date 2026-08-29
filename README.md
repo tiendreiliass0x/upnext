@@ -60,7 +60,9 @@ bun is the package manager and `bun.lock` is the only lockfile. Node stays the
 runtime: `better-sqlite3` ships a Node-ABI native binding that bun's runtime
 refuses to load, so Next.js, Vitest and the cleanup script all execute under
 Node. `bun run <script>` is the right way to invoke them — it resolves the
-binary and spawns it under Node.
+binary and spawns it under Node. `.nvmrc` pins the Node major (24), the same
+one CI and the image use; `nvm use` in the repo picks it up. Keep the three in
+step: a native binding built for one major will not load under another.
 
 ## Audio Storage and Streaming
 
