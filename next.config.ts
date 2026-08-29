@@ -17,6 +17,12 @@ function localNetworkAddresses() {
     .map((address) => address.address);
 }
 
+// The named Cloudflare tunnel that fronts the dev server for anyone off the
+// venue wifi (see README, "Reaching the dev server from another network").
+// Listed with the LAN addresses so hot reload works through it too: Next
+// refuses its dev websocket to any origin it was not told about.
+const devTunnelHost = "dev.younext.dev";
+
 const nextConfig: NextConfig = {
   // The floating dev-tools badge sits on top of the booth UI.
   devIndicators: false,
@@ -24,7 +30,9 @@ const nextConfig: NextConfig = {
   // Generated files that reappear are noise in the repo; off.
   agentRules: false,
   allowedDevOrigins:
-    process.env.NODE_ENV === "production" ? undefined : localNetworkAddresses(),
+    process.env.NODE_ENV === "production"
+      ? undefined
+      : [...localNetworkAddresses(), devTunnelHost],
   // This repo lives under a directory that carries a pnpm-workspace.yaml for
   // other projects. Pin the root so Turbopack neither adopts that workspace
   // nor warns about ignoring it.
