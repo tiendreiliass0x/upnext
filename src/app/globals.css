@@ -1266,13 +1266,6 @@ button:active:not(:disabled) {
   cursor: pointer;
 }
 
-.identity-note {
-  margin: -5px 0 0;
-  color: var(--muted);
-  font-size: 9px;
-  text-align: center;
-}
-
 .missing-room {
   max-width: 720px;
   padding-top: 100px;

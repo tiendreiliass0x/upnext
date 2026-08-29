@@ -66,7 +66,7 @@ describe("identity onboarding", () => {
       expect(onSave).toHaveBeenCalledWith("+32 470 12 34 56", "Night Owl"),
     );
     expect(
-      screen.getByText(/phone number identifies your account/i),
+      screen.getByText(/phone number is only your login/i),
     ).toBeInTheDocument();
   });
 
