@@ -1226,7 +1226,10 @@ describe("the first screen's headline", () => {
   it("sells the product to a curator or DJ arriving cold", () => {
     render(<IdentityGate joiningRoom={false} onSave={vi.fn()} onLogin={vi.fn()} />);
     expect(
-      screen.getByRole("heading", { level: 1, name: /Your fans decide what plays next/ }),
+      screen.getByRole("heading", {
+        level: 1,
+        name: /You curate\.\s*Your fans decide what to play next\./,
+      }),
     ).toBeInTheDocument();
     expect(screen.getByText(/For music curators and DJs/)).toBeInTheDocument();
     expect(screen.queryByText(/Pick a name/)).not.toBeInTheDocument();

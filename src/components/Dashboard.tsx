@@ -2665,7 +2665,7 @@ export function IdentityGate({
               ? "Your first vote is in."
               : joiningRoom
                 ? "Pick a name."
-                : "Your fans decide what plays next."}
+                : "You curate."}
           <span>
             {mode === "login"
               ? "Continue on this device."
@@ -2673,7 +2673,7 @@ export function IdentityGate({
                 ? "Add your phone to vote again."
                 : joiningRoom
                   ? "Then bid on what plays next."
-                  : "Open a broadcast session in a minute."}
+                  : "Your fans decide what to play next."}
           </span>
         </h1>
         {/* The headline carries the pitch; only logging in and keep-voting
