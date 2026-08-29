@@ -909,6 +909,37 @@ describe("the room-wide face stack in the booth", () => {
   });
 });
 
+describe("the room-wide face stack on the guest page", () => {
+  it("shows who is in the room under the ballot title", async () => {
+    const room: PublicSession = {
+      id: "ABC123",
+      name: "Room",
+      venue: "",
+      createdAt: new Date().toISOString(),
+      revision: 1,
+      totalVotes: 9,
+      guestCount: 8,
+      votedTrackIds: [],
+      anonymousVoteUsed: false,
+      nowPlaying: null,
+      voters: [{ name: "Delia Perla" }, { name: "Amyr" }, { name: null }],
+      tracks,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: room })),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+    const heading = await screen.findByRole("heading", { name: "Make your picks" });
+    const stack = within(heading.parentElement as HTMLElement).getByLabelText(
+      "In the room Delia Perla, Amyr and 6 others",
+    );
+    expect(within(stack).getByTitle("Amyr")).toHaveTextContent("A");
+    expect(within(stack).getByText("+5")).toBeInTheDocument();
+  });
+});
+
 describe("the faces behind a row's votes", () => {
   const withVoters = (voters: SessionTrack["voters"], votes: number): SessionTrack => ({
     ...tracks[0],

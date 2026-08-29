@@ -615,8 +615,8 @@ button:active:not(:disabled) {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 15%, var(--surface));
 }
 
-/* The room-wide stack under the "Crowd queue" title: bigger faces, and a
-   top margin instead of the row's tight one. */
+/* The room-wide stack under the "Crowd queue" / "Make your picks" titles:
+   bigger faces, and a top margin instead of the row's tight one. */
 .voter-stack.room-voters {
   margin: 12px 0 0;
   display: flex;

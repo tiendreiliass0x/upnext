@@ -2280,6 +2280,12 @@ function GuestRoom({
           <div>
             <span>Up next</span>
             <h2 id="ballot-title">Make your picks</h2>
+            <VoterStack
+              voters={session.voters}
+              votes={session.guestCount}
+              label="In the room"
+              className="room-voters"
+            />
           </div>
           <span className="track-count">{session.tracks.length} tracks</span>
         </div>
