@@ -10,6 +10,7 @@ import {
   getSession,
   getTrackPreviewKey,
   registerAudioUpload,
+  roomVoterPreviewLimit,
   setNowPlaying,
   toggleVote,
   voterPreviewLimit,
@@ -436,6 +437,31 @@ describe("sessions", () => {
       trackId: target,
     });
     expect(getSession(created.session.id)!.tracks.find((item) => item.id === target)!.voters).toEqual([]);
+  });
+
+  it("stacks the room's voters once each, named first, capped for the header", () => {
+    const host = account("+32470000094", "Host");
+    const amyr = account("+32470000095", "Amyr");
+    const created = room(host.id);
+    const [first, second] = created.session.tracks;
+    // Amyr votes twice, an anonymous browser once: two people, three votes.
+    toggleVote({ sessionId: created.session.id, trackId: first.id, accountId: amyr.id });
+    toggleVote({ sessionId: created.session.id, trackId: second.id, accountId: amyr.id });
+    castAnonymousVote({ sessionId: created.session.id, trackId: first.id, voterId: "anon-voter-01" });
+
+    let current = getSession(created.session.id)!;
+    expect(current.totalVotes).toBe(3);
+    expect(current.guestCount).toBe(2);
+    expect(current.voters).toEqual([{ name: "Amyr" }, { name: null }]);
+    expect(JSON.stringify(current.voters)).not.toContain("anon-voter-01");
+
+    for (let index = 0; index < roomVoterPreviewLimit + 3; index += 1) {
+      castAnonymousVote({ sessionId: created.session.id, trackId: second.id, voterId: `anon-voter-1${index}` });
+    }
+    current = getSession(created.session.id)!;
+    expect(current.guestCount).toBe(roomVoterPreviewLimit + 5);
+    expect(current.voters).toHaveLength(roomVoterPreviewLimit);
+    expect(current.voters[0]).toEqual({ name: "Amyr" });
   });
 
   it("caps the faces per row and leaves the rest to the count", () => {

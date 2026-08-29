@@ -1424,6 +1424,7 @@ export default function Dashboard({
     votedTrackIds: [],
     anonymousVoteUsed: false,
     nowPlaying: null,
+    voters: [],
     tracks: draftTracks.map((track, position) => ({
       id: track.id,
       title: track.title,
@@ -2149,6 +2150,12 @@ function DJLiveRoom({
             <div>
               <span>Live ranking</span>
               <h2 id="live-queue-title">Crowd queue</h2>
+              <VoterStack
+                voters={session.voters}
+                votes={session.guestCount}
+                label="In the room"
+                className="room-voters"
+              />
             </div>
             <div className="live-stats">
               <span><strong>{session.guestCount}</strong> voters</span>
@@ -2328,11 +2335,24 @@ function voterSummary(voters: TrackVoter[], votes: number) {
  * social act in the room, so who's in on a song should be visible, not just
  * a number.
  */
-function VoterStack({ voters, votes }: { voters: TrackVoter[]; votes: number }) {
+function VoterStack({
+  voters,
+  votes,
+  label = "Voted by",
+  className = "",
+}: {
+  voters: TrackVoter[];
+  votes: number;
+  label?: string;
+  className?: string;
+}) {
   if (votes === 0) return null;
   const hidden = votes - voters.length;
   return (
-    <span className="voter-stack" aria-label={`Voted by ${voterSummary(voters, votes)}`}>
+    <span
+      className={`voter-stack ${className}`.trim()}
+      aria-label={`${label} ${voterSummary(voters, votes)}`}
+    >
       <span className="voter-faces" aria-hidden="true">
         {voters.map((voter, index) =>
           voter.name ? (

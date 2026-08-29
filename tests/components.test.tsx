@@ -115,6 +115,7 @@ describe("identity onboarding", () => {
       votedTrackIds,
       anonymousVoteUsed: votedTrackIds.length > 0,
       nowPlaying: null,
+      voters: [],
       tracks: [
         { ...tracks[0], votes: totalVotes > 0 ? 1 : 0 },
         { ...tracks[1], votes: totalVotes > 1 ? 1 : 0 },
@@ -217,6 +218,7 @@ describe("identity onboarding", () => {
             votedTrackIds: [],
             anonymousVoteUsed: false,
             nowPlaying: null,
+            voters: [],
             tracks: [{ ...tracks[0], votes: 0 }],
           },
         }),
@@ -249,6 +251,7 @@ describe("conditional room polling", () => {
     votedTrackIds: [],
     anonymousVoteUsed: false,
     nowPlaying: null,
+    voters: [],
     tracks,
   });
 
@@ -311,6 +314,7 @@ describe("guest link reachability", () => {
     votedTrackIds: [],
     anonymousVoteUsed: false,
     nowPlaying: null,
+    voters: [],
     tracks,
   };
 
@@ -707,6 +711,7 @@ describe("now playing", () => {
     guestCount: 0,
     votedTrackIds: [],
     anonymousVoteUsed: false,
+    voters: [],
     nowPlaying: {
       trackId: "track-one",
       title: "First Track",
@@ -858,6 +863,52 @@ describe("the listen-along dock", () => {
   });
 });
 
+describe("the room-wide face stack in the booth", () => {
+  it("shows who is in the room under the Crowd queue title", async () => {
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    const room: PublicSession = {
+      id: "ABC123",
+      name: "Room",
+      venue: "",
+      createdAt: new Date().toISOString(),
+      revision: 1,
+      totalVotes: 9,
+      guestCount: 8,
+      votedTrackIds: [],
+      anonymousVoteUsed: false,
+      nowPlaying: null,
+      voters: [{ name: "Delia Perla" }, { name: "Amyr" }, { name: null }],
+      tracks,
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/accounts") {
+          return Response.json({
+            account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" },
+          });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({
+            activeRoom: { session: room, hostKey: "host-key" },
+            guestBaseUrl: "https://upnext.example",
+          });
+        }
+        return Response.json({ session: room });
+      }),
+    );
+
+    render(<Dashboard />);
+    const heading = await screen.findByRole("heading", { name: "Crowd queue" });
+    const stack = within(heading.parentElement as HTMLElement).getByLabelText(
+      "In the room Delia Perla, Amyr and 6 others",
+    );
+    expect(within(stack).getByTitle("Delia Perla")).toHaveTextContent("D");
+    expect(within(stack).getByText("+5")).toBeInTheDocument();
+  });
+});
+
 describe("the faces behind a row's votes", () => {
   const withVoters = (voters: SessionTrack["voters"], votes: number): SessionTrack => ({
     ...tracks[0],
@@ -906,6 +957,7 @@ describe("auto-advance in the booth", () => {
       guestCount: 0,
       votedTrackIds: [],
       anonymousVoteUsed: false,
+      voters: [],
       nowPlaying: {
         trackId: "track-one",
         title: "First Track",
@@ -989,6 +1041,7 @@ describe("auto-advance timing", () => {
       guestCount: 0,
       votedTrackIds: [],
       anonymousVoteUsed: false,
+      voters: [],
       nowPlaying: {
         trackId: "track-one",
         title: "First Track",
