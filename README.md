@@ -180,9 +180,14 @@ Songs play in full, so a playlist here is a listenable set, not just an audition
 ## Now Playing
 
 The live booth has a **Now playing** panel with one main action: *Play crowd
-pick*, which puts on the top-voted song that is not on cooldown. The DJ can
-also take a song off. Each change stamps the track as played and bumps the
-room revision, so every guest's next poll carries it.
+pick*, which puts on the top-voted song that is not on cooldown. Every row in
+the queue also has its own *Play*, for the DJ's call rather than the crowd's:
+a request from the floor, a change of mood, a song that is still cooling
+(cooldown limits votes, not the DJ; the button says "on cooldown" so it is a
+choice, not a slip). The row on now says so instead. The DJ can also take a
+song off. Each change stamps the track as played and bumps the room revision,
+so every guest's next poll carries it. The headphones on a row's art are the
+DJ's private pre-listen, not the room's speakers.
 
 A played song is not gone for good — people may want to hear it again — but it
 sits out on a **cooldown** until two other songs have rolled (fewer in a room

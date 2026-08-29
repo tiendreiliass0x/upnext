@@ -479,8 +479,8 @@ describe("the DJ's pre-listen", () => {
     const user = userEvent.setup();
     const onAudition = vi.fn(async (track: SessionTrack) => `https://signed.example/${track.id}`);
     const { unmount } = render(<QueueList tracks={tracks} onAudition={onAudition} />);
-    const firstButton = screen.getByRole("button", { name: /^play first track$/i });
-    const secondButton = screen.getByRole("button", { name: /^play second track$/i });
+    const firstButton = screen.getByRole("button", { name: /^pre-listen to first track$/i });
+    const secondButton = screen.getByRole("button", { name: /^pre-listen to second track$/i });
 
     await user.click(firstButton);
     await waitFor(() => expect(firstButton).toHaveAttribute("aria-pressed", "true"));
@@ -506,9 +506,9 @@ describe("the DJ's pre-listen", () => {
     render(
       <QueueList tracks={tracks} onAudition={async () => { throw new Error("nope"); }} />,
     );
-    await user.click(screen.getByRole("button", { name: /^play first track$/i }));
+    await user.click(screen.getByRole("button", { name: /^pre-listen to first track$/i }));
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /^play first track$/i })).toHaveAttribute(
+      expect(screen.getByRole("button", { name: /^pre-listen to first track$/i })).toHaveAttribute(
         "aria-pressed",
         "false",
       ),
@@ -785,6 +785,55 @@ describe("now playing", () => {
     expect(change?.init?.method).toBe("POST");
     expect((change?.init?.headers as Record<string, string>)["x-upnext-host-key"]).toBe("host-key");
     expect(JSON.parse(String(change?.init?.body))).toEqual({ trackId: "next" });
+  });
+
+  it("lets the DJ put any row on, a cooling one included, and marks it On now", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    // First Track is on cooldown in this room: votes are refused, the DJ is not.
+    const played: PublicSession = {
+      ...room,
+      revision: 4,
+      nowPlaying: { ...room.nowPlaying!, trackId: "track-one", title: "First Track", artist: "Artist A" },
+    };
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push({ url, init });
+        if (url === "/api/accounts") {
+          return Response.json({ account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" } });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({
+            activeRoom: { session: { ...room, nowPlaying: null }, hostKey: "host-key" },
+            guestBaseUrl: "https://upnext.example",
+          });
+        }
+        if (url.endsWith("/now-playing")) return Response.json({ session: played });
+        return Response.json({ session: { ...room, nowPlaying: null } });
+      }),
+    );
+    render(<Dashboard />);
+
+    const play = await screen.findByRole(
+      "button",
+      { name: "Play First Track (on cooldown)" },
+      { timeout: 3000 },
+    );
+    // The crowd pick and the row's own Play are different controls.
+    expect(screen.getByRole("button", { name: /play crowd pick: second track/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Play Second Track" })).toBeInTheDocument();
+    await user.click(play);
+
+    await screen.findByText("First Track", { selector: ".now-playing-copy strong" });
+    const change = calls.find((call) => call.url.endsWith("/now-playing"));
+    expect(change?.init?.method).toBe("POST");
+    expect(JSON.parse(String(change?.init?.body))).toEqual({ trackId: "track-one" });
+    // Its row now says so instead of offering Play again.
+    expect(screen.getByText("On now")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^play first track/i })).not.toBeInTheDocument();
   });
 });
 

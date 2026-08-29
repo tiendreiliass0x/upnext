@@ -2202,7 +2202,13 @@ function DJLiveRoom({
               )}
             </div>
           </section>
-          <QueueList tracks={session.tracks} onAudition={onAudition} />
+          <QueueList
+            tracks={session.tracks}
+            onAudition={onAudition}
+            onPlay={(track) => onPlay(track.id)}
+            nowPlayingTrackId={session.nowPlaying?.trackId ?? null}
+            isChangingTrack={isChangingTrack}
+          />
         </section>
       </div>
     </main>
@@ -2456,6 +2462,17 @@ type QueueListProps = {
    * broadcast and nothing else.
    */
   onAudition?: (track: SessionTrack) => Promise<string>;
+  /**
+   * When given, every row gets a Play that puts that song on the room. The
+   * crowd pick stays the one-tap default in the panel above; this is for the
+   * DJ's own call: a request from the floor, a change of mood, a song still
+   * cooling. Cooldown limits votes, not the DJ.
+   */
+  onPlay?: (track: SessionTrack) => void;
+  /** The song on now; its row shows that instead of a Play. */
+  nowPlayingTrackId?: string | null;
+  /** A change is in flight; Plays wait for it rather than racing it. */
+  isChangingTrack?: boolean;
 };
 
 export function QueueList({
@@ -2466,6 +2483,9 @@ export function QueueList({
   lockSelectedVotes = false,
   onVote,
   onAudition,
+  onPlay,
+  nowPlayingTrackId = null,
+  isChangingTrack = false,
 }: QueueListProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playingTrackId, setPlayingTrackId] = useState("");
@@ -2541,6 +2561,7 @@ export function QueueList({
         const isPending = pendingVotes.has(track.id);
         const played = Boolean(track.playedAt);
         const cooling = track.cooldown > 0;
+        const onNow = track.id === nowPlayingTrackId;
 
         return (
           <li
@@ -2553,7 +2574,7 @@ export function QueueList({
                 type="button"
                 className="queue-art preview-play"
                 onClick={() => void toggleAudition(track)}
-                aria-label={`${playingTrackId === track.id ? "Stop" : "Play"} ${track.title}`}
+                aria-label={`${playingTrackId === track.id ? "Stop pre-listening to" : "Pre-listen to"} ${track.title}`}
                 aria-pressed={playingTrackId === track.id}
               >
                 {loadingTrackId === track.id ? (
@@ -2561,7 +2582,7 @@ export function QueueList({
                 ) : playingTrackId === track.id ? (
                   <Pause size={17} fill="currentColor" />
                 ) : (
-                  <Play size={17} fill="currentColor" />
+                  <Headphones size={18} strokeWidth={2.2} />
                 )}
               </button>
             ) : (
@@ -2597,6 +2618,27 @@ export function QueueList({
                 )}
                 <span>{track.votes}</span>
               </button>
+            ) : onPlay ? (
+              <span className="track-actions">
+                <span className="vote-total">
+                  <ArrowUp size={16} /> {track.votes}
+                </span>
+                {onNow ? (
+                  <span className="row-on-now">
+                    <AudioLines size={14} aria-hidden="true" /> On now
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="row-play"
+                    disabled={isChangingTrack}
+                    onClick={() => onPlay(track)}
+                    aria-label={`Play ${track.title}${cooling ? " (on cooldown)" : ""}`}
+                  >
+                    <Play size={14} fill="currentColor" /> Play
+                  </button>
+                )}
+              </span>
             ) : (
               <span className="vote-total">
                 <ArrowUp size={16} /> {track.votes}
