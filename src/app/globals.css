@@ -540,11 +540,17 @@ button:active:not(:disabled) {
   gap: 4px;
 }
 
-.track-copy strong,
-.track-copy small {
+.track-copy strong {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The artist line carries the cooldown count ("2 more songs"), which the DJ
+   reads; on a phone the booth's row actions leave it too little width for
+   one line, so it wraps rather than ending in an ellipsis. */
+.track-copy small {
+  overflow-wrap: anywhere;
 }
 
 .preview-status {
@@ -1011,6 +1017,58 @@ button:active:not(:disabled) {
 .preview-play[aria-pressed="true"] {
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+/* The booth's row actions: the vote total, and Play for the DJ's own call. */
+.track-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.row-play {
+  min-height: 36px;
+  padding: 0 12px 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--ink-inverse);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.row-play:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+.row-play:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+.row-on-now {
+  min-height: 36px;
+  padding: 0 12px 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 999px;
+  color: var(--accent);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .preview-loader {
