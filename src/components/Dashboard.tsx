@@ -1380,7 +1380,7 @@ export default function Dashboard({
         <header className="app-header">
           <span className="wordmark">
             <span className="wordmark-dot" aria-hidden="true" />
-            UP/NEXT
+            YOU/NEXT
           </span>
         </header>
         <LoadingRoom
@@ -1401,7 +1401,7 @@ export default function Dashboard({
         <header className="app-header">
           <span className="wordmark">
             <span className="wordmark-dot" aria-hidden="true" />
-            UP/NEXT
+            YOU/NEXT
           </span>
           {sharedSessionId && (
             <span className="guest-header-room">
@@ -1458,7 +1458,7 @@ export default function Dashboard({
           aria-label="Open DJ booth"
         >
           <span className="wordmark-dot" aria-hidden="true" />
-          UP/NEXT
+          YOU/NEXT
         </button>
 
         <div className="header-actions">
@@ -1842,7 +1842,7 @@ function DJSetup({
         </div>
         <p>
           For music curators and DJs. Open a live session, share one link, and
-          every fan&apos;s phone votes on what plays next.
+          every fan&apos;s phone bids on what plays next.
         </p>
       </section>
 
@@ -2003,7 +2003,7 @@ function DJSetup({
 
         <aside className="launch-panel">
           <div className="launch-art" aria-hidden="true">
-            <span>UP</span>
+            <span>YOU</span>
             <AudioLines size={54} strokeWidth={1.3} />
             <span>NEXT</span>
           </div>

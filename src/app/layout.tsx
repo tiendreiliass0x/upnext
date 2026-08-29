@@ -13,9 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "UP/NEXT | Broadcast sessions your fans steer",
+  title: "YOU/NEXT | Broadcast sessions your fans steer",
   description:
-    "For music curators and DJs: open a live broadcast session, share it with your fans, and let them vote on what plays next.",
+    "For music curators and DJs: open a live broadcast session, share it with your fans, and let them bid on what plays next.",
 };
 
 export const viewport: Viewport = {
