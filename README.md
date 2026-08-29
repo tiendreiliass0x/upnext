@@ -62,7 +62,11 @@ refuses to load, so Next.js, Vitest and the cleanup script all execute under
 Node. `bun run <script>` is the right way to invoke them — it resolves the
 binary and spawns it under Node. `.nvmrc` pins the Node major (24), the same
 one CI and the image use; `nvm use` in the repo picks it up. Keep the three in
-step: a native binding built for one major will not load under another.
+step: a native binding built for one major will not load under another. An
+older Node does not fail politely here — better-sqlite3 13 needs N-API 10, and
+Node 22 segfaults loading it, silently, on the first database call — so
+`next.config.ts` refuses to start on anything below 24 and says why. If a
+terminal was open before the nvm default moved, `nvm use` fixes its PATH.
 
 ## Audio Storage and Streaming
 
