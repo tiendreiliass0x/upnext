@@ -26,6 +26,10 @@ export const accountStorageQuota =
   Math.max(1, Number(process.env.UPLOAD_QUOTA_MB) || 1024) * 1024 * 1024;
 // Uploads per account per hour: generous for a set, far too few for a script.
 const uploadRateLimit = { limit: 60, windowMs: 60 * 60 * 1000 };
+// What a client is told to wait when another upload holds the gate. Short,
+// because it is a poll interval rather than a penalty: the caller is normally
+// waiting on its own previous file to finish.
+const busyRetryAfterSeconds = 5;
 type UploadRegistry = typeof globalThis & {
   djBoothAudioJobs?: Set<string>;
 };
@@ -67,14 +71,19 @@ export async function POST(request: Request) {
       { status: 413 },
     );
   }
-  const retryAfter = takeRateLimit("uploads", account.id, uploadRateLimit);
-  if (retryAfter !== null) return rateLimitedResponse(retryAfter);
+  // The busy gate answers before the rate limiter counts, because being told
+  // to come back is not an upload. A client working through a batch is bounced
+  // here repeatedly while its own previous file finishes, and charging each
+  // bounce against sixty-an-hour would let one troubled batch spend the whole
+  // budget without a single file landing.
   if (activeAudioJobs.has(account.id) || activeAudioJobs.size >= 2) {
     return NextResponse.json(
       { error: "Uploads are busy. Try again in a moment." },
-      { status: 429 },
+      { status: 429, headers: { "Retry-After": String(busyRetryAfterSeconds) } },
     );
   }
+  const retryAfter = takeRateLimit("uploads", account.id, uploadRateLimit);
+  if (retryAfter !== null) return rateLimitedResponse(retryAfter);
 
   let uploadedObjectKey = "";
   activeAudioJobs.add(account.id);

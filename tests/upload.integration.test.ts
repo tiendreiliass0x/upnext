@@ -260,6 +260,47 @@ describe("preview API", () => {
     expect(mediaMocks.uploadPreview).not.toHaveBeenCalled();
   });
 
+  it("turns away a client whose own upload is still in flight, for free", async () => {
+    const account = createAccount({
+      phone: "+32470000047",
+      pseudonym: "Batcher",
+    });
+    let release = () => {};
+    mediaMocks.uploadPreview.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (release = () => resolve())),
+    );
+    const inFlight = upload(
+      uploadRequest({ token: account.authToken, uploadId: "first" }),
+    );
+    await vi.waitFor(() =>
+      expect(mediaMocks.uploadPreview).toHaveBeenCalledTimes(1),
+    );
+
+    const busy = await upload(
+      uploadRequest({ token: account.authToken, uploadId: "second" }),
+    );
+    expect(busy.status).toBe(429);
+    // Named, so the client waits that long instead of guessing at a retry.
+    expect(busy.headers.get("Retry-After")).toBe("5");
+    expect((await json<{ error: string }>(busy)).error).toMatch(/busy/i);
+
+    release();
+    await inFlight;
+
+    // The bounce cost nothing: a full hour's worth of real uploads still
+    // fits. A batch that is told to come back must not spend the budget it
+    // is coming back to use.
+    for (let index = 0; index < 59; index += 1) {
+      await upload(uploadRequest({ token: account.authToken }));
+    }
+    expect(mediaMocks.uploadPreview).toHaveBeenCalledTimes(60);
+    const limited = await upload(uploadRequest({ token: account.authToken }));
+    expect(limited.status).toBe(429);
+    expect((await json<{ error: string }>(limited)).error).toMatch(
+      /too many attempts/i,
+    );
+  });
+
   it("rate limits uploads per account", async () => {
     const account = createAccount({
       phone: "+32470000046",
