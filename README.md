@@ -277,6 +277,29 @@ a room's first quarter hour, and a login that succeeds gives its slot back:
 enumerating numbers is paid for in misses, and a crowd's real logins are not
 misses.
 
+## Tips For A Pick
+
+A DJ can add a Cash App cashtag, a Venmo username, or both while opening a
+room. Those handles belong to that room rather than to the account, are fixed
+once it goes live, and are remembered only in the DJ's browser to prefill the
+next setup. The server accepts handles rather than arbitrary URLs and builds
+the providers' public HTTPS links itself.
+
+After a guest's vote is saved, that row offers **Tip for this pick**. It
+opens a sheet with the song and a copyable room reference, then hands the guest
+to Cash App or Venmo in a new tab. UP/NEXT does not verify who owns the
+DJ-provided profiles, so the sheet tells guests to confirm the recipient before
+sending. It also does not receive payment status, store amounts, take a fee, or
+claim that a tip was completed. A tip never changes votes, queue order,
+cooldown, or auto-advance, and the sheet says plainly that it does not guarantee
+a play.
+
+Cash App and Venmo are US services, and DJs are responsible for using profiles
+eligible to receive their payments. A future guaranteed-request product would
+need an actual marketplace integration, verified accounts, webhooks, durable
+financial records, captures and refunds; external profile links deliberately
+do none of that.
+
 ## Tests
 
 - `bun run test` runs the isolated unit, API, component, R2-mock, and format-sniff suites.

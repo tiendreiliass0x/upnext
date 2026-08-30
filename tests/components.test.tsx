@@ -111,6 +111,7 @@ describe("identity onboarding", () => {
       id: "ABC123",
       name: "Browser Vote Room",
       djName: "DJ Owl",
+      tipLinks: { cashApp: null, venmo: null },
       venue: "Test Venue",
       createdAt: "2026-08-26T00:00:00.000Z",
       revision: totalVotes,
@@ -214,6 +215,8 @@ describe("identity onboarding", () => {
           session: {
             id: "ABC123",
             name: "Authoritative Room",
+            djName: "DJ Owl",
+            tipLinks: { cashApp: null, venmo: null },
             venue: "",
             createdAt: "2026-08-26T00:00:00.000Z",
             revision: 0,
@@ -248,6 +251,7 @@ describe("conditional room polling", () => {
     id: "ABC123",
     name: "Conditional Room",
     djName: "DJ Owl",
+    tipLinks: { cashApp: null, venmo: null },
     venue: "Test Venue",
     createdAt: "2026-08-26T00:00:00.000Z",
     revision,
@@ -312,6 +316,7 @@ describe("guest link reachability", () => {
     id: "ABC123",
     name: "Host Room",
     djName: "DJ Owl",
+    tipLinks: { cashApp: null, venmo: null },
     venue: "Test Venue",
     createdAt: "2026-08-26T00:00:00.000Z",
     revision: 0,
@@ -583,6 +588,228 @@ describe("queue interactions", () => {
       }),
     ).toHaveAttribute("aria-pressed", "false");
   });
+
+  it("reveals a tip action only for a saved pick", async () => {
+    const user = userEvent.setup();
+    const onTip = vi.fn();
+    render(
+      <QueueList
+        tracks={tracks}
+        interactive
+        votedTrackIds={new Set(["track-one", "track-two"])}
+        onVote={vi.fn()}
+        onTip={onTip}
+      />,
+    );
+
+    const button = screen.getByRole("button", {
+      name: "Open tip options for First Track by Artist A, row 1",
+    });
+    expect(
+      screen.getByRole("button", {
+        name: "Open tip options for Second Track by Artist B, row 2",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Tip for this pick")).toHaveLength(2);
+    await user.click(button);
+    expect(onTip).toHaveBeenCalledWith(tracks[0]);
+  });
+});
+
+describe("tip handles in the setup form", () => {
+  async function typeCashtag(value: string) {
+    const user = userEvent.setup();
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/accounts") {
+          return Response.json({
+            account: { id: "host", pseudonym: "DJ Owl", phoneLast4: "1234" },
+          });
+        }
+        if (url === "/api/libraries") return Response.json({ libraries: [] });
+        return Response.json({ activeRoom: null, guestBaseUrl: null });
+      }),
+    );
+    render(<Dashboard />);
+    const field = await screen.findByLabelText(/cash app/i, {}, { timeout: 3000 });
+    await user.type(field, value);
+    return { field, user };
+  }
+
+  it("says what is wrong under the field, before a single track uploads", async () => {
+    const { field } = await typeCashtag("1owl");
+
+    expect(field).toHaveAttribute("aria-invalid", "true");
+    expect(
+      screen.getByText(/cashtag that starts with a letter/i),
+    ).toBeInTheDocument();
+    // Nothing to launch into: the room would refuse this handle, so the DJ is
+    // not sent through an upload to be told so.
+    expect(screen.getByRole("button", { name: /start session/i })).toBeDisabled();
+    expect(screen.queryByText("Crowd tips enabled")).not.toBeInTheDocument();
+  });
+
+  it("clears once the handle is one the room would take", async () => {
+    const { field, user } = await typeCashtag("1owl");
+    await user.clear(field);
+    await user.type(field, "$DJOwl");
+
+    expect(field).toHaveAttribute("aria-invalid", "false");
+    expect(
+      screen.queryByText(/cashtag that starts with a letter/i),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText("Crowd tips enabled")).toBeInTheDocument();
+  });
+});
+
+describe("external tips", () => {
+  const room: PublicSession = {
+    id: "ABC123",
+    name: "Tip Room",
+    djName: "DJ Owl",
+    tipLinks: {
+      cashApp: "https://cash.app/$DJOwl",
+      venmo: "https://account.venmo.com/u/dj-owl",
+    },
+    venue: "",
+    createdAt: new Date().toISOString(),
+    revision: 1,
+    totalVotes: 1,
+    guestCount: 1,
+    votedTrackIds: ["track-one"],
+    anonymousVoteUsed: true,
+    nowPlaying: null,
+    voters: [],
+    tracks: [{ ...tracks[0], votes: 1 }, tracks[1]],
+  };
+
+  it("keeps the room standing when the payload predates tip links", async () => {
+    // Mid-deploy: this bundle polls an instance that has never heard of
+    // tipLinks. A ballot with no tip buttons beats a blank page.
+    const { tipLinks, ...olderPayload } = room;
+    void tipLinks;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: olderPayload })),
+    );
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    await screen.findByRole("heading", { name: "Make your picks" }, { timeout: 3000 });
+    expect(screen.getAllByText("First Track").length).toBeGreaterThan(0);
+    expect(
+      screen.queryByRole("button", { name: /^open tip options/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("opens provider links with a copyable reference and no play promise", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: room })),
+    );
+    const view = render(<Dashboard initialSessionId="ABC123" />);
+
+    const trigger = await screen.findByRole("button", {
+      name: "Open tip options for First Track by Artist A, row 1",
+    });
+    await user.click(trigger);
+    const dialog = screen.getByRole("dialog", {
+      name: "Tip for this pick",
+    });
+    expect(within(dialog).getByText("First Track")).toBeInTheDocument();
+    expect(within(dialog).getByText(/does not change the queue/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/does not verify who owns/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/guarantee/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: /open cash app/i })).toHaveAttribute(
+      "href",
+      "https://cash.app/$DJOwl",
+    );
+    expect(within(dialog).getByRole("link", { name: /open venmo/i })).toHaveAttribute(
+      "href",
+      "https://account.venmo.com/u/dj-owl",
+    );
+
+    const close = within(dialog).getByRole("button", { name: "Close tip options" });
+    await waitFor(() => expect(close).toHaveFocus());
+    await user.tab({ shift: true });
+    expect(within(dialog).getByRole("link", { name: /open venmo/i })).toHaveFocus();
+    await user.tab();
+    expect(close).toHaveFocus();
+
+    await user.click(within(dialog).getByRole("button", { name: "Copy payment note" }));
+    expect(writeText).toHaveBeenCalledWith(
+      "UP/NEXT ABC123: First Track by Artist A",
+    );
+    expect(await within(dialog).findByText("Reference copied.")).toBeInTheDocument();
+
+    writeText.mockRejectedValueOnce(new Error("denied"));
+    await user.click(within(dialog).getByRole("button", { name: "Copy payment note" }));
+    expect(await within(dialog).findByText("Copy the reference manually.")).toBeInTheDocument();
+
+    // Polling and playback update the parent while the sheet is open. That
+    // must not replace the original trigger remembered for focus restoration.
+    view.rerender(<Dashboard initialSessionId="ABC123" />);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("sends room-scoped handles at launch and remembers them on this device", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    let creationBody: Record<string, unknown> | null = null;
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/accounts") {
+          return Response.json({
+            account: { id: "host", pseudonym: "DJ Owl", phoneLast4: "1234" },
+          });
+        }
+        if (url === "/api/libraries") return Response.json({ libraries: [] });
+        if (url === "/api/sessions" && init?.method === "POST") {
+          creationBody = JSON.parse(String(init.body)) as Record<string, unknown>;
+          return Response.json(
+            { session: room, hostKey: "host-key", guestBaseUrl: null },
+            { status: 201 },
+          );
+        }
+        if (url === "/api/sessions") {
+          return Response.json({ activeRoom: null, guestBaseUrl: null });
+        }
+        if (url === "/api/sessions/ABC123") {
+          return Response.json({ session: room });
+        }
+        return Response.json({ error: "unexpected" }, { status: 500 });
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard />);
+
+    const cashApp = await screen.findByLabelText(/Cash App/i);
+    const venmo = screen.getByLabelText(/Venmo/i);
+    await user.type(cashApp, "$DJOwl");
+    await user.type(venmo, "@dj-owl");
+    await user.click(screen.getByRole("button", { name: "Start session" }));
+
+    await waitFor(() => expect(creationBody).not.toBeNull());
+    expect(creationBody).toMatchObject({
+      cashAppHandle: "$DJOwl",
+      venmoHandle: "@dj-owl",
+    });
+    expect(JSON.parse(window.localStorage.getItem("upnext-tip-handles") ?? "null")).toEqual({
+      cashAppHandle: "$DJOwl",
+      venmoHandle: "@dj-owl",
+    });
+  });
 });
 
 describe("review fixes", () => {
@@ -747,6 +974,7 @@ describe("now playing", () => {
     id: "ABC123",
     name: "Room",
     djName: "DJ Owl",
+    tipLinks: { cashApp: null, venmo: null },
     venue: "",
     createdAt: "2026-08-26T00:00:00.000Z",
     revision: 3,
@@ -1039,6 +1267,7 @@ describe("the crowd's pre-listen", () => {
     id: "ABC123",
     name: "Room",
     djName: "DJ Owl",
+    tipLinks: { cashApp: null, venmo: null },
     venue: "",
     createdAt: new Date().toISOString(),
     revision: 1,
@@ -1100,6 +1329,7 @@ describe("handing the room back after a pre-listen", () => {
     id: "ABC123",
     name: "Room",
     djName: "DJ Owl",
+    tipLinks: { cashApp: null, venmo: null },
     venue: "",
     createdAt: new Date().toISOString(),
     revision: 2,
@@ -1200,6 +1430,7 @@ describe("the crowd's now-playing card", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: new Date().toISOString(),
       revision: 2,
@@ -1351,6 +1582,7 @@ describe("the room-wide face stack in the booth", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: new Date().toISOString(),
       revision: 1,
@@ -1397,6 +1629,7 @@ describe("the room-wide face stack on the guest page", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: new Date().toISOString(),
       revision: 1,
@@ -1465,6 +1698,7 @@ describe("auto-advance in the booth", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: "2026-08-26T00:00:00.000Z",
       revision: 3,
@@ -1550,6 +1784,7 @@ describe("auto-advance timing", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: "2026-08-26T00:00:00.000Z",
       revision: 3,

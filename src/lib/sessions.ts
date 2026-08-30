@@ -1,4 +1,10 @@
 import { getDatabase } from "@/lib/db";
+import {
+  normalizeTipHandles,
+  tipLinksFor,
+  type TipHandles,
+  type TipLinks,
+} from "@/lib/tips";
 
 export type SessionTrack = {
   id: string;
@@ -39,6 +45,7 @@ export type PublicSession = {
   id: string;
   name: string;
   djName: string;
+  tipLinks: TipLinks;
   venue: string;
   createdAt: string;
   revision: number;
@@ -60,6 +67,8 @@ type SessionRow = {
   id: string;
   name: string;
   dj_name: string;
+  cash_app_handle: string | null;
+  venmo_handle: string | null;
   venue: string;
   created_at: string;
   expires_at: string;
@@ -238,7 +247,8 @@ function getPublicSession(sessionId: string, accountId?: string) {
   return database.transaction(() => {
     const session = database
       .prepare(
-        `SELECT s.id, s.name, a.pseudonym AS dj_name, s.venue, s.created_at,
+        `SELECT s.id, s.name, a.pseudonym AS dj_name, s.cash_app_handle,
+                s.venmo_handle, s.venue, s.created_at,
                 s.expires_at, s.ended_at, s.revision,
                 s.now_playing_track_id, s.now_playing_started_at
          FROM sessions s JOIN accounts a ON a.id = s.host_account_id
@@ -303,6 +313,10 @@ function getPublicSession(sessionId: string, accountId?: string) {
       id: session.id,
       name: session.name,
       djName: session.dj_name,
+      tipLinks: tipLinksFor({
+        cashApp: session.cash_app_handle,
+        venmo: session.venmo_handle,
+      }),
       venue: session.venue,
       createdAt: session.created_at,
       revision: session.revision,
@@ -341,6 +355,7 @@ export function createSession(input: {
   venue: string;
   accountId: string;
   requestId?: string | null;
+  tipHandles?: TipHandles;
   tracks: Array<{
     title: string;
     artist: string;
@@ -348,6 +363,7 @@ export function createSession(input: {
   }>;
 }) {
   expireOldSessions();
+  const tipHandles = normalizeTipHandles(input.tipHandles ?? {});
   const database = getDatabase();
   const created = database.transaction(() => {
     if (input.requestId) {
@@ -360,6 +376,27 @@ export function createSession(input: {
         | { id: string; host_key: string }
         | undefined;
       if (existing) {
+        // The room is not created twice, but a retry is the DJ pressing Start
+        // again: handles they corrected between the two presses are what they
+        // mean now, and dropping them would leave a dead tip link under a
+        // panel that says tipping is on. The revision moves only when
+        // something actually changed, so a guest already in the room stops
+        // being answered 304 with a payload that has the old links.
+        database
+          .prepare(
+            `UPDATE sessions
+                SET cash_app_handle = ?, venmo_handle = ?,
+                    revision = revision + 1
+              WHERE id = ?
+                AND (cash_app_handle IS NOT ? OR venmo_handle IS NOT ?)`,
+          )
+          .run(
+            tipHandles.cashApp,
+            tipHandles.venmo,
+            existing.id,
+            tipHandles.cashApp,
+            tipHandles.venmo,
+          );
         return { id: existing.id, hostKey: existing.host_key };
       }
     }
@@ -372,8 +409,8 @@ export function createSession(input: {
       .prepare(
         `INSERT INTO sessions
           (id, name, venue, host_account_id, host_key, request_id,
-           revision, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+           cash_app_handle, venmo_handle, revision, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       )
       .run(
         id,
@@ -384,6 +421,8 @@ export function createSession(input: {
         // An empty string is "no request ID", not a request ID; storing it
         // would occupy the per-host unique index for every later blank one.
         input.requestId || null,
+        tipHandles.cashApp,
+        tipHandles.venmo,
         createdAt,
         expiresAt,
       );

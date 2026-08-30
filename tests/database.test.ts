@@ -1,11 +1,32 @@
 import Database from "better-sqlite3";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { closeDatabase, getDatabase } from "@/lib/db";
 import { setupTestDatabase } from "./helpers/database";
 
 const testDatabase = setupTestDatabase();
 
 describe("database migrations", () => {
+  it("migrates a cached connection after the database module reloads", async () => {
+    const cached = getDatabase();
+    cached.exec(`
+      ALTER TABLE sessions DROP COLUMN cash_app_handle;
+      ALTER TABLE sessions DROP COLUMN venmo_handle;
+    `);
+
+    // Next dev preserves the connection on globalThis while replacing this
+    // module. The replacement must initialize that connection before queries
+    // compiled against the new schema run.
+    vi.resetModules();
+    const reloaded = await import("@/lib/db");
+    const migrated = reloaded.getDatabase();
+    const columns = migrated.pragma("table_info(sessions)") as Array<{
+      name: string;
+    }>;
+
+    expect(columns.map(({ name }) => name)).toContain("cash_app_handle");
+    expect(columns.map(({ name }) => name)).toContain("venmo_handle");
+  });
+
   it("adds anonymous voter storage without losing legacy account data", () => {
     closeDatabase();
     const legacy = new Database(testDatabase.path);
@@ -96,6 +117,15 @@ describe("database migrations", () => {
       name: string;
     }>;
     expect(sessionColumns.map(({ name }) => name)).toContain("request_id");
+    expect(sessionColumns.map(({ name }) => name)).toContain("cash_app_handle");
+    expect(sessionColumns.map(({ name }) => name)).toContain("venmo_handle");
+    expect(
+      migrated
+        .prepare(
+          "SELECT cash_app_handle, venmo_handle FROM sessions WHERE id = 'ROOMA'",
+        )
+        .get(),
+    ).toEqual({ cash_app_handle: null, venmo_handle: null });
     expect(uploadColumns.map(({ name }) => name)).toContain("request_id");
     expect(
       migrated.prepare("SELECT COUNT(*) AS count FROM votes").get(),

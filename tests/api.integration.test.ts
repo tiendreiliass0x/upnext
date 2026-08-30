@@ -162,6 +162,7 @@ describe("room conditional requests", () => {
     const tag = first.headers.get("etag");
     expect(first.status).toBe(200);
     expect(tag).toBeTruthy();
+    expect(tag).toMatch(new RegExp(`^"${created.session.id}-v2-`));
 
     const repeated = await roomRequest(created.session.id, {
       token: host.token,
@@ -352,6 +353,8 @@ describe("session API", () => {
     const sessionPayload = {
       name: "API Room",
       venue: "Test Venue",
+      cashAppHandle: " $DJTest ",
+      venmoHandle: "@dj-test",
       requestId: "api-room-request",
       tracks: [
         { title: "Track One", artist: "Artist A" },
@@ -377,11 +380,16 @@ describe("session API", () => {
     const created = await body<{
       session: {
         id: string;
+        tipLinks: { cashApp: string | null; venmo: string | null };
         tracks: Array<{ id: string; title: string }>;
       };
       hostKey: string;
     }>(createdResponse);
     expect(createdResponse.status).toBe(201);
+    expect(created.session.tipLinks).toEqual({
+      cashApp: "https://cash.app/$DJTest",
+      venmo: "https://account.venmo.com/u/dj-test",
+    });
 
     const repeatedResponse = await createRoom(
       request("http://localhost/api/sessions", {
@@ -478,6 +486,23 @@ describe("session API", () => {
       }),
     );
     expect(invalidRoom.status).toBe(400);
+
+    const invalidTipHandle = await createRoom(
+      request("http://localhost/api/sessions", {
+        method: "POST",
+        token: host.token,
+        body: {
+          name: "Unsafe tip link",
+          cashAppHandle: "https://cash.app/$someone-else",
+          tracks: [{ title: "Track", artist: "Artist" }],
+        },
+      }),
+    );
+    expect(invalidTipHandle.status).toBe(400);
+    expect(await body<{ error: string }>(invalidTipHandle)).toEqual({
+      error:
+        "Enter a Cash App $cashtag that starts with a letter, 1 to 20 letters or numbers.",
+    });
 
     const createdResponse = await createRoom(
       request("http://localhost/api/sessions", {

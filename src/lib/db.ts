@@ -7,15 +7,23 @@ type DatabaseRegistry = typeof globalThis & {
 };
 
 const registry = globalThis as DatabaseRegistry;
+let initializedDatabase: Database.Database | undefined;
 
 export function getDatabase() {
-  if (registry.djBoothDatabase) return registry.djBoothDatabase;
+  const cached = registry.djBoothDatabase;
+  if (cached && initializedDatabase === cached) return cached;
 
-  const databasePath =
-    process.env.SQLITE_PATH ?? join(process.cwd(), "data", "dj-booth.sqlite");
-  mkdirSync(dirname(databasePath), { recursive: true });
+  let database = cached;
+  if (!database) {
+    const databasePath =
+      process.env.SQLITE_PATH ?? join(process.cwd(), "data", "dj-booth.sqlite");
+    mkdirSync(dirname(databasePath), { recursive: true });
+    database = new Database(databasePath);
+  }
 
-  const database = new Database(databasePath);
+  // Next dev keeps this connection on globalThis across module reloads. The
+  // module-local marker resets, so a surviving connection still runs any new
+  // idempotent schema setup before updated queries can reach it.
   database.pragma("journal_mode = WAL");
   database.pragma("foreign_keys = ON");
   database.pragma("busy_timeout = 5000");
@@ -50,6 +58,8 @@ export function getDatabase() {
       host_key TEXT NOT NULL UNIQUE,
       request_id TEXT,
       revision INTEGER NOT NULL DEFAULT 0,
+      cash_app_handle TEXT,
+      venmo_handle TEXT,
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
       ended_at TEXT,
@@ -240,6 +250,12 @@ export function getDatabase() {
       ALTER TABLE sessions ADD COLUMN now_playing_started_at TEXT;
     `);
   }
+  if (!sessionColumns.some((column) => column.name === "cash_app_handle")) {
+    database.exec("ALTER TABLE sessions ADD COLUMN cash_app_handle TEXT");
+  }
+  if (!sessionColumns.some((column) => column.name === "venmo_handle")) {
+    database.exec("ALTER TABLE sessions ADD COLUMN venmo_handle TEXT");
+  }
   const trackColumns = database.pragma("table_info(tracks)") as Array<{
     name: string;
   }>;
@@ -274,6 +290,7 @@ export function getDatabase() {
   `);
 
   registry.djBoothDatabase = database;
+  initializedDatabase = database;
   return database;
 }
 
@@ -281,4 +298,5 @@ export function closeDatabase() {
   if (!registry.djBoothDatabase) return;
   registry.djBoothDatabase.close();
   delete registry.djBoothDatabase;
+  initializedDatabase = undefined;
 }

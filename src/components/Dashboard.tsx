@@ -3,19 +3,23 @@
 import {
   forwardRef,
   useEffect,
+  useEffectEvent,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
   type CSSProperties,
 } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import {
   ArrowRight,
   ArrowUp,
   AudioLines,
   Check,
+  CircleDollarSign,
   Copy,
+  ExternalLink,
   Headphones,
   ListMusic,
   Pause,
@@ -37,6 +41,7 @@ import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import { fetchWithTimeout, readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import { previewSeconds } from "@/lib/preview";
+import { tipHandleError } from "@/lib/tips";
 import type { NowPlaying } from "@/lib/sessions";
 import type { PublicSession, SessionTrack, TrackVoter } from "@/lib/sessions";
 
@@ -46,6 +51,7 @@ const accountTokenStorageKey = "upnext-account-token";
 const accountRequestStorageKey = "upnext-account-request-id";
 const voterIdStorageKey = "upnext-voter-id";
 const anonymousVotesStorageKey = "upnext-anonymous-votes";
+const tipHandlesStorageKey = "upnext-tip-handles";
 
 type DraftTrack = {
   id: string;
@@ -516,6 +522,8 @@ export default function Dashboard({
   const [isLive, setIsLive] = useState(Boolean(sharedSessionId));
   const [sessionName, setSessionName] = useState("Friday After Dark");
   const [venue, setVenue] = useState("Room 02");
+  const [cashAppHandle, setCashAppHandle] = useState("");
+  const [venmoHandle, setVenmoHandle] = useState("");
   const [draftTracks, setDraftTracks] = useState<DraftTrack[]>(demoTracks);
   const [session, setSession] = useState<PublicSession | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(sharedSessionId);
@@ -585,6 +593,22 @@ export default function Dashboard({
       Boolean(activeSessionId && getStoredAnonymousVote(activeSessionId)),
     );
   }, [activeSessionId]);
+
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(
+        window.localStorage.getItem(tipHandlesStorageKey) ?? "null",
+      ) as { cashAppHandle?: unknown; venmoHandle?: unknown } | null;
+      if (typeof saved?.cashAppHandle === "string") {
+        setCashAppHandle(saved.cashAppHandle);
+      }
+      if (typeof saved?.venmoHandle === "string") {
+        setVenmoHandle(saved.venmoHandle);
+      }
+    } catch {
+      // Empty fields remain usable when storage is blocked or malformed.
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1089,6 +1113,15 @@ export default function Dashboard({
       setError("Add a session name and at least one track.");
       return;
     }
+    // Before the uploads, not after them: the route rejects a malformed handle
+    // too, but by then the DJ has waited through their whole set.
+    const handleError =
+      tipHandleError("cashApp", cashAppHandle) ??
+      tipHandleError("venmo", venmoHandle);
+    if (handleError) {
+      setError(handleError);
+      return;
+    }
 
     setupLockedRef.current = true;
     setIsStarting(true);
@@ -1152,6 +1185,8 @@ export default function Dashboard({
         body: JSON.stringify({
           name: sessionName,
           venue,
+          cashAppHandle,
+          venmoHandle,
           requestId: sessionRequestIdRef.current,
           tracks: preparedTracks.map(({ title, artist, previewKey }) => ({
             title,
@@ -1177,6 +1212,14 @@ export default function Dashboard({
         revision: data.session.revision,
       };
       setSession(data.session);
+      try {
+        window.localStorage.setItem(
+          tipHandlesStorageKey,
+          JSON.stringify({ cashAppHandle, venmoHandle }),
+        );
+      } catch {
+        // Handles are still stored on this room when local storage is blocked.
+      }
       sessionRequestIdRef.current = "";
       setActiveSessionId(data.session.id);
       setHostKey(data.hostKey);
@@ -1522,6 +1565,7 @@ export default function Dashboard({
     id: "PREVIEW",
     name: sessionName || "Untitled session",
     djName: account?.pseudonym ?? "DJ",
+    tipLinks: { cashApp: null, venmo: null },
     venue,
     createdAt: "",
     revision: 0,
@@ -1635,12 +1679,16 @@ export default function Dashboard({
           <DJSetup
           sessionName={sessionName}
           venue={venue}
+          cashAppHandle={cashAppHandle}
+          venmoHandle={venmoHandle}
           tracks={draftTracks}
           isDragging={isDragging}
           isStarting={isStarting}
           uploadProgress={uploadProgress}
           onSessionNameChange={setSessionName}
           onVenueChange={setVenue}
+          onCashAppHandleChange={setCashAppHandle}
+          onVenmoHandleChange={setVenmoHandle}
           onAddFiles={addFiles}
           onDragChange={setIsDragging}
           onRemoveTrack={(trackId) =>
@@ -1895,12 +1943,16 @@ export function LibraryPicker({
 type DJSetupProps = {
   sessionName: string;
   venue: string;
+  cashAppHandle: string;
+  venmoHandle: string;
   tracks: DraftTrack[];
   isDragging: boolean;
   isStarting: boolean;
   uploadProgress: string;
   onSessionNameChange: (value: string) => void;
   onVenueChange: (value: string) => void;
+  onCashAppHandleChange: (value: string) => void;
+  onVenmoHandleChange: (value: string) => void;
   onAddFiles: (files: FileList | File[]) => Promise<void>;
   onDragChange: (value: boolean) => void;
   onRemoveTrack: (trackId: string) => void;
@@ -1914,12 +1966,16 @@ type DJSetupProps = {
 function DJSetup({
   sessionName,
   venue,
+  cashAppHandle,
+  venmoHandle,
   tracks,
   isDragging,
   isStarting,
   uploadProgress,
   onSessionNameChange,
   onVenueChange,
+  onCashAppHandleChange,
+  onVenmoHandleChange,
   onAddFiles,
   onDragChange,
   onRemoveTrack,
@@ -1929,6 +1985,13 @@ function DJSetup({
   onAddLibraryTracks,
   onStart,
 }: DJSetupProps) {
+  // Said under the field it belongs to, while the DJ is still looking at it:
+  // the same rule the room will apply, so a handle that reads clean here is
+  // one the launch will take.
+  const cashAppMessage = tipHandleError("cashApp", cashAppHandle);
+  const venmoMessage = tipHandleError("venmo", venmoHandle);
+  const tipHandlesBroken = Boolean(cashAppMessage || venmoMessage);
+
   return (
     <main className="setup-page page-shell">
       <section className="setup-hero">
@@ -2100,6 +2163,68 @@ function DJSetup({
               )}
             </div>
           </section>
+
+          <section className="form-section" aria-labelledby="tips-title">
+            <div className="section-number">03</div>
+            <div className="section-content">
+              <div className="section-heading">
+                <h2 id="tips-title">Let the crowd tip you</h2>
+                <p>
+                  Optional. Add either handle and fans can tip you after voting
+                  for a song.
+                </p>
+              </div>
+              <div className="field-grid tip-fields">
+                <label className="field">
+                  <span>Cash App <small>optional</small></span>
+                  <input
+                    type="text"
+                    value={cashAppHandle}
+                    maxLength={21}
+                    placeholder="$cashtag"
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={isStarting}
+                    aria-invalid={Boolean(cashAppMessage)}
+                    aria-describedby={cashAppMessage ? "cash-app-error" : undefined}
+                    onChange={(event) => onCashAppHandleChange(event.target.value)}
+                  />
+                  {cashAppMessage && (
+                    <small className="field-error" id="cash-app-error">
+                      {cashAppMessage}
+                    </small>
+                  )}
+                </label>
+                <label className="field">
+                  <span>Venmo <small>optional</small></span>
+                  <input
+                    type="text"
+                    value={venmoHandle}
+                    maxLength={31}
+                    placeholder="@username"
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={isStarting}
+                    aria-invalid={Boolean(venmoMessage)}
+                    aria-describedby={venmoMessage ? "venmo-error" : undefined}
+                    onChange={(event) => onVenmoHandleChange(event.target.value)}
+                  />
+                  {venmoMessage && (
+                    <small className="field-error" id="venmo-error">
+                      {venmoMessage}
+                    </small>
+                  )}
+                </label>
+              </div>
+              <p className="tip-setup-note">
+                These handles are public and fixed once this room goes live.
+                Use profiles you own that are eligible to receive business
+                payments.
+              </p>
+            </div>
+          </section>
         </div>
 
         <aside className="launch-panel">
@@ -2117,12 +2242,22 @@ function DJSetup({
               {tracks.length} {tracks.length === 1 ? "track" : "tracks"}
               {venue ? ` · ${venue}` : ""}
             </p>
+            {(cashAppHandle.trim() || venmoHandle.trim()) && !tipHandlesBroken && (
+              <span className="tip-ready">
+                <CircleDollarSign size={13} /> Crowd tips enabled
+              </span>
+            )}
           </div>
           <button
             type="button"
             className="primary-button launch-button"
             onClick={onStart}
-            disabled={isStarting || tracks.length === 0 || !sessionName.trim()}
+            disabled={
+              isStarting ||
+              tracks.length === 0 ||
+              !sessionName.trim() ||
+              tipHandlesBroken
+            }
           >
             <span>
               {isStarting ? uploadProgress || "Opening room..." : "Start session"}
@@ -2396,6 +2531,179 @@ function NowPlayingCard({
   );
 }
 
+function TipSheet({
+  session,
+  track,
+  onClose,
+}: {
+  session: PublicSession;
+  track: SessionTrack;
+  onClose: () => void;
+}) {
+  const [message, setMessage] = useState("");
+  const sheetRef = useRef<HTMLElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const closeSheet = useEffectEvent(onClose);
+  const reference = `UP/NEXT ${session.id}: ${track.title} by ${track.artist}`;
+
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const app = document.querySelector<HTMLElement>(".upnext-app");
+    const wasInert = app?.inert ?? false;
+    if (app) app.inert = true;
+    closeRef.current?.focus();
+
+    function keepFocusInSheet(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSheet();
+        return;
+      }
+      if (event.key !== "Tab" || !sheetRef.current) return;
+      const focusable = Array.from(
+        sheetRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      } else if (!sheetRef.current.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", keepFocusInSheet);
+    return () => {
+      window.removeEventListener("keydown", keepFocusInSheet);
+      if (app) app.inert = wasInert;
+      window.setTimeout(() => {
+        if (previousFocus?.isConnected) previousFocus.focus();
+      }, 0);
+    };
+  }, []);
+
+  async function copyReference(provider?: string) {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(reference);
+      setMessage(
+        provider
+          ? `Reference copied. Finish your tip in ${provider}.`
+          : "Reference copied.",
+      );
+    } catch {
+      setMessage(
+        provider
+          ? `Copy failed. Copy the reference manually in ${provider} if you want to identify your pick.`
+          : "Copy the reference manually.",
+      );
+    }
+  }
+
+  return createPortal(
+    <div
+      className="tip-sheet-backdrop"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section
+        ref={sheetRef}
+        className="tip-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="tip-sheet-title"
+        aria-describedby="tip-sheet-disclosure"
+      >
+        <button
+          type="button"
+          ref={closeRef}
+          className="tip-sheet-close"
+          onClick={onClose}
+          aria-label="Close tip options"
+        >
+          <X size={18} />
+        </button>
+        <span className="tip-sheet-icon" aria-hidden="true">
+          <CircleDollarSign size={23} />
+        </span>
+        <span className="tip-sheet-eyebrow">
+          Profiles provided by {session.djName}
+        </span>
+        <h2 id="tip-sheet-title">Tip for this pick</h2>
+        <p className="tip-sheet-track">
+          <strong>{track.title}</strong>
+          <span>{track.artist}</span>
+        </p>
+
+        <div className="tip-reference">
+          <span>
+            <small>Payment note</small>
+            <code>{reference}</code>
+          </span>
+          <button
+            type="button"
+            onClick={() => void copyReference()}
+            aria-label="Copy payment note"
+          >
+            <Copy size={16} />
+          </button>
+        </div>
+
+        <div className="tip-providers">
+          {session.tipLinks?.cashApp && (
+            <a
+              href={session.tipLinks.cashApp}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => void copyReference("Cash App")}
+            >
+              <span className="tip-provider-mark">$</span>
+              <span>
+                <strong>Open Cash App</strong>
+                <small>Opens an external payment profile</small>
+              </span>
+              <ExternalLink size={17} />
+            </a>
+          )}
+          {session.tipLinks?.venmo && (
+            <a
+              href={session.tipLinks.venmo}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => void copyReference("Venmo")}
+            >
+              <span className="tip-provider-mark">V</span>
+              <span>
+                <strong>Open Venmo</strong>
+                <small>Opens an external payment profile</small>
+              </span>
+              <ExternalLink size={17} />
+            </a>
+          )}
+        </div>
+
+        <p className="tip-copy-status" role="status" aria-live="polite">
+          {message}
+        </p>
+        <p id="tip-sheet-disclosure" className="tip-disclosure">
+          UP/NEXT does not verify who owns these profiles or whether a payment
+          is completed. Check the recipient in Cash App or Venmo before
+          sending. Tipping does not change the queue or guarantee a play.
+        </p>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function GuestRoom({
   session,
   isPreview,
@@ -2413,6 +2721,7 @@ function GuestRoom({
     playing: false,
     status: "",
   });
+  const [tipTrack, setTipTrack] = useState<SessionTrack | null>(null);
   // Read while a pre-listen is starting, which is after the dock has already
   // been paused for it, so the state itself is too late to ask.
   const wasFollowingRef = useRef(false);
@@ -2436,6 +2745,12 @@ function GuestRoom({
     oweRoomRef.current = false;
     playerRef.current?.resume();
   }
+  // Optional chaining, not a type lie: during a rolling deploy this bundle
+  // polls instances that predate tipLinks, and a room whose guests see a
+  // blank page is worse than one with no tip buttons.
+  const tippingEnabled = Boolean(
+    session.tipLinks?.cashApp || session.tipLinks?.venmo,
+  );
   if (isLoading) return <LoadingRoom label="Joining the room" />;
 
   const topTrack = session.tracks.find((track) => track.cooldown === 0);
@@ -2516,6 +2831,7 @@ function GuestRoom({
             onVote={onVote}
             onAudition={auditionRow}
             onAuditionEnd={returnToTheRoom}
+            onTip={tippingEnabled ? setTipTrack : undefined}
           />
         ) : (
           <div className="empty-ballot">
@@ -2535,6 +2851,14 @@ function GuestRoom({
         nowPlaying={session.nowPlaying}
         onStateChange={reportPlayback}
       />
+      {tipTrack && (
+        <TipSheet
+          key={tipTrack.id}
+          session={session}
+          track={tipTrack}
+          onClose={() => setTipTrack(null)}
+        />
+      )}
     </main>
   );
 }
@@ -2680,6 +3004,8 @@ type QueueListProps = {
    * hand the room back at its end.
    */
   onAuditionEnd?: () => void;
+  /** Revealed only after a vote is saved; tips never affect row ordering. */
+  onTip?: (track: SessionTrack) => void;
   /**
    * When given, every row gets a Play that puts that song on the room. The
    * crowd pick stays the one-tap default in the panel above; this is for the
@@ -2702,6 +3028,7 @@ export function QueueList({
   onVote,
   onAudition,
   onAuditionEnd,
+  onTip,
   onPlay,
   nowPlayingTrackId = null,
   isChangingTrack = false,
@@ -2839,6 +3166,16 @@ export function QueueList({
                 {onPlay && !track.previewUrl ? " · no audio" : ""}
               </small>
               <VoterStack voters={track.voters} votes={track.votes} />
+              {interactive && hasVote && onTip && (
+                <button
+                  type="button"
+                  className="tip-pick-button"
+                  onClick={() => onTip(track)}
+                  aria-label={`Open tip options for ${track.title} by ${track.artist}, row ${index + 1}`}
+                >
+                  <CircleDollarSign size={14} /> Tip for this pick
+                </button>
+              )}
             </span>
             {interactive ? (
               <button

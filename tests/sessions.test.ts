@@ -40,9 +40,20 @@ function room(accountId: string, requestId = crypto.randomUUID()) {
 describe("sessions", () => {
   it("identifies the DJ on the public room", () => {
     const host = account("+32470000096", "DJ Owl");
-    const created = room(host.id, "named-dj-room");
+    const created = createSession({
+      name: "Friday Room",
+      venue: "Room 02",
+      accountId: host.id,
+      requestId: "named-dj-room",
+      tipHandles: { cashApp: "DJOwl", venmo: "dj-owl" },
+      tracks: [{ title: "First", artist: "Artist A" }],
+    });
 
     expect(created.session.djName).toBe("DJ Owl");
+    expect(created.session.tipLinks).toEqual({
+      cashApp: "https://cash.app/$DJOwl",
+      venmo: "https://account.venmo.com/u/dj-owl",
+    });
     expect(getSession(created.session.id)?.djName).toBe("DJ Owl");
   });
 
@@ -348,6 +359,52 @@ describe("sessions", () => {
 
     expect(repeated.session.id).toBe(first.session.id);
     expect(repeated.hostKey).toBe(first.hostKey);
+    const count = getDatabase()
+      .prepare("SELECT COUNT(*) AS count FROM sessions WHERE request_id = ?")
+      .get(requestId) as { count: number };
+    expect(count.count).toBe(1);
+  });
+
+  it("takes the handles from a retried launch, and leaves the room alone otherwise", () => {
+    const host = account("+32470000018", "Retrying Host");
+    const requestId = "retried-launch";
+    const first = createSession({
+      name: "Tip Room",
+      venue: "",
+      accountId: host.id,
+      requestId,
+      tipHandles: { cashApp: "DJ0wl", venmo: null },
+      tracks: [{ title: "Track", artist: "Artist" }],
+    });
+    const beforeRetry = getSession(first.session.id)?.revision ?? -1;
+
+    // The first POST landed but the client never heard back, so the DJ fixes
+    // the cashtag they mistyped and presses Start again.
+    const retried = createSession({
+      name: "Tip Room",
+      venue: "",
+      accountId: host.id,
+      requestId,
+      tipHandles: { cashApp: "DJOwl", venmo: null },
+      tracks: [{ title: "Track", artist: "Artist" }],
+    });
+
+    expect(retried.session.id).toBe(first.session.id);
+    const corrected = getSession(first.session.id);
+    expect(corrected?.tipLinks.cashApp).toBe("https://cash.app/$DJOwl");
+    // A guest already in the room has to be told, so the tag stops matching.
+    expect(corrected?.revision).toBeGreaterThan(beforeRetry);
+
+    // A retry that changes nothing leaves the room exactly where it was.
+    createSession({
+      name: "Tip Room",
+      venue: "",
+      accountId: host.id,
+      requestId,
+      tipHandles: { cashApp: "DJOwl", venmo: null },
+      tracks: [{ title: "Track", artist: "Artist" }],
+    });
+    expect(getSession(first.session.id)?.revision).toBe(corrected?.revision);
     const count = getDatabase()
       .prepare("SELECT COUNT(*) AS count FROM sessions WHERE request_id = ?")
       .get(requestId) as { count: number };

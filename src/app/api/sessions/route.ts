@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAccountFromRequest } from "@/lib/auth";
 import { getPublicBaseUrl } from "@/lib/config";
 import { createSession, getActiveHostSession } from "@/lib/sessions";
+import { InvalidTipHandleError, normalizeTipHandles } from "@/lib/tips";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +33,8 @@ export async function POST(request: Request) {
       venue?: unknown;
       tracks?: unknown;
       requestId?: unknown;
+      cashAppHandle?: unknown;
+      venmoHandle?: unknown;
     };
 
     const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -67,6 +70,19 @@ export async function POST(request: Request) {
       );
     }
 
+    let tipHandles;
+    try {
+      tipHandles = normalizeTipHandles({
+        cashApp: body.cashAppHandle,
+        venmo: body.venmoHandle,
+      });
+    } catch (error) {
+      if (error instanceof InvalidTipHandleError) {
+        return NextResponse.json({ error: error.message }, { status: 400 });
+      }
+      throw error;
+    }
+
     const result = createSession({
       name: name.slice(0, 80),
       venue: venue.slice(0, 80),
@@ -75,6 +91,7 @@ export async function POST(request: Request) {
         typeof body.requestId === "string"
           ? body.requestId.trim().slice(0, 100)
           : null,
+      tipHandles,
       tracks,
     });
 

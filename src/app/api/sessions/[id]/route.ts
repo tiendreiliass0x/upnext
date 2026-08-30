@@ -11,6 +11,10 @@ import { getAnonymousVoterId } from "@/lib/voters";
 
 export const dynamic = "force-dynamic";
 
+// Bump when the shape or meaning of PublicSession changes so a tag issued by
+// the previous deployment cannot answer 304 for a representation it lacked.
+const roomRepresentationVersion = 2;
+
 // The room payload carries per-viewer fields (votedTrackIds, anonymousVoteUsed),
 // so the tag has to identify the viewer as well as the room revision. The viewer
 // is hashed to keep voter IDs out of a header that ends up in logs and proxies.
@@ -19,7 +23,7 @@ function buildRoomTag(sessionId: string, revision: number, viewerKey: string) {
     .update(viewerKey)
     .digest("hex")
     .slice(0, 16);
-  return `"${sessionId}-${revision}-${viewer}"`;
+  return `"${sessionId}-v${roomRepresentationVersion}-${revision}-${viewer}"`;
 }
 
 function matchesRoomTag(header: string | null, tag: string) {
