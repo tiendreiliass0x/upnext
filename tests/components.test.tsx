@@ -10,6 +10,7 @@ import Dashboard, {
   QueueList,
   facesThatFit,
 } from "@/components/Dashboard";
+import { previewSeconds } from "@/lib/preview";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
 const tracks: SessionTrack[] = [
@@ -458,9 +459,11 @@ describe("the DJ's pre-listen", () => {
     static instances: MockAudio[] = [];
     src = "";
     preload = "";
+    currentTime = 0;
     onended: (() => void) | null = null;
     onerror: (() => void) | null = null;
     onpause: (() => void) | null = null;
+    ontimeupdate: (() => void) | null = null;
     play = vi.fn().mockResolvedValue(undefined);
     pause = vi.fn();
     removeAttribute = vi.fn();
@@ -499,6 +502,37 @@ describe("the DJ's pre-listen", () => {
     unmount();
     expect(secondAudio.pause).toHaveBeenCalled();
     expect(secondAudio.removeAttribute).toHaveBeenCalledWith("src");
+  });
+
+  it("stops the row at the end of the preview window, with the file left whole", async () => {
+    const user = userEvent.setup();
+    render(
+      <QueueList
+        tracks={tracks}
+        onAudition={async (track) => `https://signed.example/${track.id}`}
+      />,
+    );
+    const button = screen.getByRole("button", { name: /^pre-listen to first track$/i });
+    await user.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+
+    const audio = MockAudio.instances[0];
+    audio.currentTime = previewSeconds - 1;
+    audio.ontimeupdate?.();
+    expect(audio.pause).not.toHaveBeenCalled();
+
+    audio.currentTime = previewSeconds;
+    audio.ontimeupdate?.();
+    expect(audio.pause).toHaveBeenCalled();
+    // Nothing was cut: the element still holds the whole signed URL, and the
+    // row is back to Play once the element reports it paused.
+    expect(audio.src).toBe("https://signed.example/track-one");
+    audio.onpause?.();
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: /^pre-listen to first track$/i }),
+      ).toHaveAttribute("aria-pressed", "false"),
+    );
   });
 
   it("drops the Stop state when the URL cannot be resolved", async () => {

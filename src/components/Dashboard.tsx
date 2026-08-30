@@ -36,6 +36,7 @@ import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import { fetchWithTimeout, readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
+import { previewSeconds } from "@/lib/preview";
 import type { NowPlaying } from "@/lib/sessions";
 import type { PublicSession, SessionTrack, TrackVoter } from "@/lib/sessions";
 
@@ -214,6 +215,7 @@ const autoAdvanceProbeAttempts = 5;
 function disposeAudio(audio: HTMLAudioElement) {
   audio.onended = null;
   audio.onerror = null;
+  audio.ontimeupdate = null;
   audio.pause();
   audio.removeAttribute("src");
   audio.load();
@@ -2023,7 +2025,7 @@ function DJSetup({
                             {track.previewKey
                               ? "Preview ready"
                               : track.file
-                                ? "30-sec preview queued"
+                                ? `${previewSeconds}-sec preview queued`
                                 : "Voting only"}
                           </span>
                         </span>
@@ -2673,6 +2675,14 @@ export function QueueList({
     // keep showing Stop for something that is no longer playing.
     audio.onpause = () => {
       if (audioRef.current === audio) setPlayingTrackId("");
+    };
+    // A pre-listen is the first previewSeconds of the song and then silence.
+    // Stopping the element is all it takes: onpause above puts the row back
+    // to Play, and the next tap starts a fresh element from the top.
+    audio.ontimeupdate = () => {
+      if (audio.currentTime < previewSeconds) return;
+      audio.ontimeupdate = null;
+      audio.pause();
     };
 
     try {

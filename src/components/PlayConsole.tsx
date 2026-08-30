@@ -16,6 +16,7 @@ import {
 import { readJson } from "@/lib/http-client";
 import type { CatalogueTrack } from "@/lib/libraries";
 import type { Playlist, PlaylistTrack } from "@/lib/playlists";
+import { previewSeconds } from "@/lib/preview";
 
 const accountTokenStorageKey = "upnext-account-token";
 
@@ -152,6 +153,8 @@ export default function PlayConsole() {
       const generation = ++playGenerationRef.current;
       setQueue(list);
       setCurrent(track);
+      setPosition(0);
+      setDuration(0);
       setIsLoadingTrack(true);
       setError("");
       try {
@@ -196,6 +199,13 @@ export default function PlayConsole() {
       return;
     }
     void playAt(list, index);
+  }
+
+  // The end of a pre-listen, whether the file ran out or the window did: the
+  // console moves on the way it always has, and simply stops on the last row.
+  function endPreview() {
+    audioRef.current?.pause();
+    step(1);
   }
 
   function step(delta: number) {
@@ -291,6 +301,10 @@ export default function PlayConsole() {
       setIsBusy(false);
     }
   }
+
+  // The dock counts down the pre-listen, not the song: a five-minute track
+  // whose window is thirty seconds should fill the bar in thirty seconds.
+  const previewWindow = duration > 0 ? Math.min(duration, previewSeconds) : 0;
 
   if (token === null) return null;
 
@@ -502,9 +516,13 @@ export default function PlayConsole() {
         preload="none"
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
-        onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
+        onTimeUpdate={(event) => {
+          const at = event.currentTarget.currentTime;
+          setPosition(at);
+          if (at >= previewSeconds) endPreview();
+        }}
         onDurationChange={(event) => setDuration(event.currentTarget.duration)}
-        onEnded={() => step(1)}
+        onEnded={endPreview}
         onError={() => setError("That preview could not be played.")}
       />
 
@@ -555,12 +573,12 @@ export default function PlayConsole() {
             <span className="player-progress" aria-hidden="true">
               <span
                 style={{
-                  width: `${duration > 0 ? Math.min(100, (position / duration) * 100) : 0}%`,
+                  width: `${previewWindow > 0 ? Math.min(100, (position / previewWindow) * 100) : 0}%`,
                 }}
               />
             </span>
             <span className="player-time">
-              {formatTime(position)}{duration > 0 ? ` / ${formatTime(duration)}` : ""}
+              {formatTime(position)}{previewWindow > 0 ? ` / ${formatTime(previewWindow)}` : ""}
             </span>
 
             <button
