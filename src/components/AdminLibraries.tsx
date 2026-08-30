@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ListMusic, Plus, Trash2, Upload, X } from "lucide-react";
 import type { Library, LibraryTrack } from "@/lib/libraries";
-import { readJson } from "@/lib/http-client";
+import { fetchWithTimeout, readJson } from "@/lib/http-client";
 
 const adminTokenStorageKey = "upnext-admin-token";
 const accountTokenStorageKey = "upnext-account-token";
@@ -37,6 +37,28 @@ async function fileFingerprint(file: File) {
     for (const byte of input) hash = (hash * 31 + byte) >>> 0;
     return `${hash.toString(16)}-${file.size}`;
   }
+}
+
+
+// How long one file gets before its upload is abandoned. Generous: a long
+// track on venue wifi is slow, not stuck. Without any deadline a stalled
+// connection never settles and the whole batch hangs on it.
+const uploadTimeoutMs = 5 * 60_000;
+// Attempts per file. Measured over the dev tunnel, a run of bulk uploads
+// loses a meaningful share of connections at the transport layer, which is
+// exactly the case a second attempt fixes. Retrying is safe because the
+// upload id is an idempotency key: the server answers a repeat of an id it
+// already stored with the stored key rather than taking a second copy.
+const uploadAttempts = 3;
+
+/**
+ * Statuses worth another attempt. 429 is the server shedding load while
+ * another upload is in flight, and 5xx is the server having a bad moment;
+ * both pass. A rejected format, an oversized file or a full quota will be
+ * rejected identically forever, so those fail the file immediately.
+ */
+function isRetryableStatus(status: number) {
+  return status === 429 || status >= 500;
 }
 
 export default function AdminLibraries() {
@@ -210,13 +232,22 @@ export default function AdminLibraries() {
     try {
       for (let index = 0; index < list.length; index += 1) {
         const file = list[index];
-        setStatus(`Creating preview ${index + 1} of ${list.length}`);
         try {
-          await uploadOne(file);
+          await uploadOne(file, (attempt) => {
+            setStatus(
+              `Creating preview ${index + 1} of ${list.length}` +
+                (attempt > 1 ? ` (retry ${attempt - 1})` : ""),
+            );
+          });
         } catch (fileError) {
           failures.push(`${file.name}: ${errorMessage(fileError)}`);
         }
       }
+      // Refresh before reporting, not after: a successful loadLibraries
+      // clears the error banner, which would wipe this batch's own list of
+      // what failed. Silently dropping a file the operator watched fail is
+      // worse than any of the failures.
+      await Promise.all([loadTracks(), loadLibraries()]);
       const added = list.length - failures.length;
       setStatus(`Added ${added} song${added === 1 ? "" : "s"}.`);
       if (failures.length > 0) {
@@ -224,7 +255,6 @@ export default function AdminLibraries() {
           `${failures.length} of ${list.length} could not be added.\n${failures.join("\n")}`,
         );
       }
-      await Promise.all([loadTracks(), loadLibraries()]);
     } catch (uploadError) {
       setError(errorMessage(uploadError));
     } finally {
@@ -233,36 +263,63 @@ export default function AdminLibraries() {
     }
   }
 
-  async function uploadOne(file: File) {
+  async function sendUpload(
+    file: File,
+    uploadId: string,
+    onAttempt: (attempt: number) => void,
+  ) {
+    let lastError = "could not be processed.";
+    for (let attempt = 1; attempt <= uploadAttempts; attempt += 1) {
+      onAttempt(attempt);
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const uploaded = await fetchWithTimeout(
+          "/api/uploads",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accountToken}`,
+              // Header values must be Latin-1 and the server ignores IDs over
+              // 100 characters, so a filename cannot go in directly: a
+              // Japanese title would throw before the request left the
+              // browser and a long one would silently lose idempotency. A
+              // hash of the same inputs is short, ASCII, and stable across a
+              // re-drop of the same file.
+              "x-upnext-upload-id": uploadId,
+            },
+            body: form,
+          },
+          uploadTimeoutMs,
+        );
+        const uploadData = await readJson<{
+          previewKey?: string;
+          error?: string;
+        }>(uploaded);
+        if (uploaded.ok && uploadData.previewKey) return uploadData.previewKey;
+        lastError = uploadData.error || lastError;
+        if (!isRetryableStatus(uploaded.status)) break;
+      } catch (requestError) {
+        // A dropped or timed-out connection: nothing was learned about the
+        // file itself, so it is worth another go.
+        lastError = errorMessage(requestError);
+      }
+      if (attempt < uploadAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+      }
+    }
+    throw new Error(lastError);
+  }
+
+  async function uploadOne(file: File, onAttempt: (attempt: number) => void) {
     // Fingerprint the file so a retry after a failure matches the first
     // attempt's idempotency key.
     const uploadId = `admin-${selectedId}-${await fileFingerprint(file)}`;
-    const form = new FormData();
-    form.append("file", file);
-    const uploaded = await fetch("/api/uploads", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accountToken}`,
-        // Header values must be Latin-1 and the server ignores IDs over 100
-        // characters, so a filename cannot go in directly: a Japanese title
-        // would throw before the request left the browser and a long one
-        // would silently lose idempotency. A hash of the same inputs is
-        // short, ASCII, and stable across a re-drop of the same file.
-        "x-upnext-upload-id": uploadId,
-      },
-      body: form,
-    });
-    const uploadData = await readJson<{
-      previewKey?: string;
-      error?: string;
-    }>(uploaded);
-    if (!uploaded.ok || !uploadData.previewKey) {
-      throw new Error(uploadData.error || "could not be processed.");
-    }
+    const previewKey = await sendUpload(file, uploadId, onAttempt);
 
     const base = file.name.replace(/\.[^.]+$/, "");
     const [maybeArtist, ...rest] = base.split(" - ");
-    const added = await fetch(
+    const added = await fetchWithTimeout(
       `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
       {
         method: "POST",
@@ -273,12 +330,12 @@ export default function AdminLibraries() {
         body: JSON.stringify({
           title: rest.length > 0 ? rest.join(" - ") : base,
           artist: rest.length > 0 ? maybeArtist : "Unknown artist",
-          previewKey: uploadData.previewKey,
+          previewKey,
         }),
       },
     );
     if (!added.ok) {
-      const data = (await added.json()) as { error?: string };
+      const data = await readJson<{ error?: string }>(added);
       throw new Error(data.error || "could not be catalogued.");
     }
   }

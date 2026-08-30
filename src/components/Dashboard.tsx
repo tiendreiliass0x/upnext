@@ -32,7 +32,7 @@ import {
 import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
-import { readJson } from "@/lib/http-client";
+import { fetchWithTimeout, readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import type { NowPlaying } from "@/lib/sessions";
 import type { PublicSession, SessionTrack, TrackVoter } from "@/lib/sessions";
@@ -199,28 +199,6 @@ function getGuestLink(sessionId: string, baseUrl?: string | null) {
 }
 
 
-async function fetchWithTimeout(
-  input: RequestInfo | URL,
-  init?: RequestInit,
-  timeoutMs = 8000,
-) {
-  const controller = new AbortController();
-  let timedOut = false;
-  const timer = window.setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-
-  try {
-    return await fetch(input, { ...init, signal: controller.signal });
-  } catch (requestError) {
-    if (timedOut) throw new Error("The connection timed out.");
-    throw requestError;
-  } finally {
-    window.clearTimeout(timer);
-  }
-}
-
 // A beat after the song ends before the next one goes on, so the room hears
 // it finish rather than being cut off by a clock that runs slightly ahead.
 const autoAdvanceGraceMs = 1500;
@@ -250,6 +228,48 @@ function claimAudio(audio: HTMLAudioElement) {
 function formatClock(seconds: number) {
   const whole = Math.max(0, Math.floor(seconds));
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+/**
+ * A moving waveform for the song that is on.
+ *
+ * Deliberately not an analyser: the booth never holds the DJ's audio (they
+ * play through their own gear and the app is only told what is on), and the
+ * guest's preview is a signed cross-origin URL, which a MediaElementSource
+ * would read as silence. So this is a rhythm rather than a measurement, and
+ * it stops dead when nothing is playing so it never implies sound that is
+ * not there.
+ *
+ * The bar heights are a fixed table, not Math.random: this renders on the
+ * server too, and a per-render pattern would not survive hydration.
+ */
+const waveformBars = [
+  0.42, 0.68, 0.95, 0.55, 0.78, 1, 0.6, 0.35, 0.72, 0.9, 0.48, 0.83, 0.62,
+  1, 0.4, 0.75, 0.58, 0.88, 0.45, 0.7,
+];
+
+export function NowPlayingWaveform({ playing }: { playing: boolean }) {
+  return (
+    <span
+      className={`waveform${playing ? " is-playing" : ""}`}
+      aria-hidden="true"
+    >
+      {waveformBars.map((height, index) => (
+        <span
+          key={index}
+          style={
+            {
+              "--bar-scale": height,
+              // Staggered so the bars travel as a wave rather than pulsing
+              // in unison; the prime-ish step keeps the pattern from lining
+              // up again within one cycle.
+              "--bar-delay": `${(index * 83) % 900}ms`,
+            } as React.CSSProperties
+          }
+        />
+      ))}
+    </span>
+  );
 }
 
 /**
@@ -364,6 +384,7 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
         >
           {isPlaying ? <Pause size={18} /> : <Play size={18} />}
         </button>
+        <NowPlayingWaveform playing={isPlaying} />
         <span className="track-copy player-now">
           <small className="now-playing-label">DJ is playing</small>
           <strong>{nowPlaying?.title ?? ""}</strong>
@@ -2180,6 +2201,7 @@ function DJLiveRoom({
                 <strong id="now-playing-title">Nothing on yet</strong>
               )}
             </div>
+            <NowPlayingWaveform playing={Boolean(session.nowPlaying)} />
             <div className="now-playing-actions">
               <button
                 type="button"

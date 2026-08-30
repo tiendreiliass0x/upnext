@@ -2181,3 +2181,40 @@ button:active:not(:disabled) {
 .queue-list li.is-played .vote-button {
   cursor: not-allowed;
 }
+
+/* The moving waveform on the song that is on. Bars are scaled rather than
+   resized so the animation stays on the compositor, and they hold their
+   shape when stopped: a still waveform reads as "paused", an absent one
+   would make the dock jump. */
+.waveform {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  flex-shrink: 0;
+}
+.waveform > span {
+  width: 3px;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
+  opacity: 0.55;
+  transform: scaleY(calc(var(--bar-scale) * 0.4));
+}
+.waveform.is-playing > span {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .waveform.is-playing > span {
+    animation: waveform-pulse 900ms ease-in-out var(--bar-delay) infinite
+      alternate;
+  }
+}
+@keyframes waveform-pulse {
+  from {
+    transform: scaleY(calc(var(--bar-scale) * 0.25));
+  }
+  to {
+    transform: scaleY(var(--bar-scale));
+  }
+}
