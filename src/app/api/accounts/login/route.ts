@@ -8,6 +8,7 @@ import {
 import {
   getClientAddress,
   rateLimitedResponse,
+  releaseRateLimit,
   takeRateLimit,
 } from "@/lib/rate-limit";
 import { getAnonymousVoterId } from "@/lib/voters";
@@ -16,8 +17,10 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   // This route is an oracle (404 unknown number, 200 + token known number),
-  // so it is throttled per address; see rate-limit.ts.
-  const retryAfter = takeRateLimit("accounts", getClientAddress(request));
+  // so it is throttled per address; see rate-limit.ts. Only the misses stay
+  // counted: a sweep is made of misses, a crowd logging in is not.
+  const clientAddress = getClientAddress(request);
+  const retryAfter = takeRateLimit("accounts", clientAddress);
   if (retryAfter !== null) return rateLimitedResponse(retryAfter);
 
   try {
@@ -39,19 +42,22 @@ export async function POST(request: Request) {
       );
     }
 
+    // The browser's free vote carries over to this account unless the
+    // browser already belongs to another one — a phone passed around a
+    // table — in which case there is simply nothing to carry over. Either
+    // way the login goes through: refusing it left that browser with no
+    // way in at all.
     const voterId = getAnonymousVoterId(request);
     if (voterId) {
-      claimAnonymousVoter({ accountId: account.id, voterId });
+      claimAnonymousVoter({ accountId: account.id, voterId, onLinkedElsewhere: "skip" });
     }
 
+    releaseRateLimit("accounts", clientAddress);
     return NextResponse.json({
       account: toPublicAccount(account),
       token: account.authToken,
     });
-  } catch (error) {
-    if (error instanceof Error && error.message.includes("voter ID")) {
-      return NextResponse.json({ error: error.message }, { status: 409 });
-    }
+  } catch {
     return NextResponse.json(
       { error: "The account could not be logged in." },
       { status: 500 },

@@ -551,6 +551,15 @@ button:active:not(:disabled) {
   white-space: nowrap;
 }
 
+/* In the queue the artist line carries the cooldown count ("2 more songs"),
+   which the DJ reads; on a phone the row's actions leave it too little width
+   for one line, so there it wraps rather than ending in an ellipsis. Other
+   .track-copy consumers keep the single line. */
+.queue-list .track-copy small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .preview-status {
   width: fit-content;
   color: var(--muted);
@@ -995,6 +1004,10 @@ button:active:not(:disabled) {
   background: color-mix(in srgb, var(--accent) 15%, var(--surface));
 }
 
+.queue-list li.is-on-now {
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
 .queue-art {
   width: 42px;
   height: 42px;
@@ -1015,6 +1028,55 @@ button:active:not(:disabled) {
 .preview-play[aria-pressed="true"] {
   background: var(--accent);
   color: var(--accent-ink);
+}
+
+/* The booth's row actions: the vote total, and one pill that reads Play,
+   Replay (a cooling song) or On now. A fixed width keeps the totals in a
+   column as rows change state; 44px tall like the count beside it. */
+.track-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.row-play {
+  min-width: 96px;
+  min-height: 44px;
+  padding: 0 12px 0 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--ink-inverse);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background-color 160ms ease, color 160ms ease;
+}
+
+.row-play:hover:not([aria-disabled="true"]) {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
+}
+
+/* Waiting on a change in flight: same look, no hand cursor. */
+.row-play[aria-disabled="true"] {
+  cursor: default;
+}
+
+/* On now wears the primary button's pairing, accent on accent-ink, which is
+   the one combination that reads on both themes' rows. */
+.row-play.is-on-now {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-color: var(--accent);
 }
 
 .preview-loader {

@@ -51,6 +51,10 @@ export async function POST(
   if (result === "stale") {
     return NextResponse.json({ session: getSession(id, account.id), stale: true });
   }
+  // Already on: nothing to restamp, nothing to announce.
+  if (result === "unchanged") {
+    return NextResponse.json({ session: getSession(id, account.id), unchanged: true });
+  }
 
   if (result === "forbidden") {
     return NextResponse.json(

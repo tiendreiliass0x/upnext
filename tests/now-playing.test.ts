@@ -38,6 +38,28 @@ function trackId(sessionId: string, title: string) {
 }
 
 describe("setNowPlaying", () => {
+  it("leaves the song that is already on untouched when it is named again", () => {
+    const host = createAccount({ phone: "+32470000069", pseudonym: "Host" });
+    const { session, hostKey } = room(host.id);
+    const banger = trackId(session.id, "Banger");
+    const play = (id: string) =>
+      setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: id });
+
+    expect(play(banger)).toBe("updated");
+    const first = getSession(session.id)!;
+
+    // A second booth tab that had not polled yet taps the same row: no new
+    // played_at (which would spend votes again and restart the cooldown), no
+    // new start time (which would restart every phone), no revision bump.
+    expect(play(banger)).toBe("unchanged");
+    const second = getSession(session.id)!;
+    expect(second.revision).toBe(first.revision);
+    expect(second.nowPlaying?.startedAt).toBe(first.nowPlaying?.startedAt);
+    expect(second.tracks.find((track) => track.id === banger)?.playedAt).toBe(
+      first.tracks.find((track) => track.id === banger)?.playedAt,
+    );
+  });
+
   it("plays the crowd pick, then the next unplayed one, and bumps the revision", () => {
     const host = createAccount({ phone: "+32470000060", pseudonym: "Host" });
     const { session, hostKey } = room(host.id);

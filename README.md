@@ -62,7 +62,11 @@ refuses to load, so Next.js, Vitest and the cleanup script all execute under
 Node. `bun run <script>` is the right way to invoke them — it resolves the
 binary and spawns it under Node. `.nvmrc` pins the Node major (24), the same
 one CI and the image use; `nvm use` in the repo picks it up. Keep the three in
-step: a native binding built for one major will not load under another.
+step: a native binding built for one major will not load under another. An
+older Node does not fail politely here — better-sqlite3 13 needs N-API 10, and
+Node 22 segfaults loading it, silently, on the first database call — so
+`next.config.ts` refuses to start on anything below 24 and says why. If a
+terminal was open before the nvm default moved, `nvm use` fixes its PATH.
 
 ## Audio Storage and Streaming
 
@@ -176,9 +180,18 @@ Songs play in full, so a playlist here is a listenable set, not just an audition
 ## Now Playing
 
 The live booth has a **Now playing** panel with one main action: *Play crowd
-pick*, which puts on the top-voted song that is not on cooldown. The DJ can
-also take a song off. Each change stamps the track as played and bumps the
-room revision, so every guest's next poll carries it.
+pick*, which puts on the top-voted song that is not on cooldown. Every row in
+the queue also has its own *Play*, for the DJ's call rather than the crowd's:
+a request from the floor, a change of mood, a song that is still cooling
+(cooldown limits votes, not the DJ; on a cooling row the button reads
+*Replay*, so it is a choice, not a slip). The row on now says *On now* there
+instead, and a row with no audio says so (phones stay silent on it). A row's
+Play names the song it saw playing, so a tap that lands after another booth
+tab, or auto-advance, has already moved the room does nothing and says so;
+tapping the song that is already on is a no-op. The DJ can also take a song
+off. Each change stamps the track as played and bumps the room revision, so
+every guest's next poll carries it. The headphones on a row's art are the
+DJ's private pre-listen, not the room's speakers.
 
 A played song is not gone for good — people may want to hear it again — but it
 sits out on a **cooldown** until two other songs have rolled (fewer in a room
@@ -247,9 +260,22 @@ the person is still in the room.
 
 QR guests receive a browser voter ID in local storage and can cast one free
 vote per room without onboarding. A second pick asks for a private phone number
-and either account creation or login; both transfer the free vote before saving
-the next one. Clearing browser storage can create a new voter ID, so this is a
-best-effort device limit until phone verification is added.
+and a pseudonym. A new number creates the account; a number that already has
+one logs into it, with its own pseudonym kept — login is phone-only and
+unverified either way, so the sign-up form and the login form clear the same
+bar and a known number is never sent back to "log in instead". The browser's
+free vote carries over to the account unless the browser is already linked to
+another account (a phone passed around a table), in which case there is
+nothing to carry and the login still goes through. Clearing browser storage
+can create a new voter ID, so this is a best-effort device limit until phone
+verification is added.
+
+The account routes are rate limited per client address, and one venue is one
+address: every phone on the wifi shares the NAT, and so does every phone that
+reaches the dev server through the tunnel. The window is therefore sized for
+a room's first quarter hour, and a login that succeeds gives its slot back:
+enumerating numbers is paid for in misses, and a crowd's real logins are not
+misses.
 
 ## Tests
 

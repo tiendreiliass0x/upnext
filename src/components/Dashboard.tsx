@@ -1254,7 +1254,7 @@ export default function Dashboard({
 
   async function changeNowPlaying(
     trackId: string | "next" | null,
-    fromTrackId?: string,
+    fromTrackId?: string | null,
   ) {
     if (!activeSessionId || !hostKey || isChangingTrack) return;
     const roomId = activeSessionId;
@@ -1277,6 +1277,7 @@ export default function Dashboard({
       );
       const data = await readJson<{
         session?: PublicSession | null;
+        stale?: boolean;
         error?: string;
       }>(response);
       if (!response.ok || !data.session) {
@@ -1288,6 +1289,12 @@ export default function Dashboard({
       if (!latest || latest.id !== next.id || latest.revision <= next.revision) {
         sessionRevisionRef.current = { id: next.id, revision: next.revision };
         setSession(next);
+      }
+      // The song this tap meant to follow was already gone: another booth
+      // tab, or auto-advance, moved the room first. Say so rather than let
+      // the DJ believe their pick went on.
+      if (data.stale) {
+        setError("The room moved on before that tap landed; the queue is current now.");
       }
     } catch (changeError) {
       setError(getErrorMessage(changeError));
@@ -1599,7 +1606,7 @@ export default function Dashboard({
           onOpenGuest={() => setView("guest")}
           onEnd={() => void endCurrentSession()}
           isChangingTrack={isChangingTrack}
-          onPlay={(trackId) => void changeNowPlaying(trackId)}
+          onPlay={(trackId, fromTrackId) => void changeNowPlaying(trackId, fromTrackId)}
           onAudition={auditionTrack}
         />
       )}
@@ -2069,7 +2076,11 @@ type DJLiveRoomProps = {
   onOpenGuest: () => void;
   onEnd: () => void;
   isChangingTrack: boolean;
-  onPlay: (trackId: string | "next" | null) => void;
+  /**
+   * fromTrackId, when given, makes the change conditional on that song still
+   * being on (null: nothing is): a row's Play names the song it saw playing.
+   */
+  onPlay: (trackId: string | "next" | null, fromTrackId?: string | null) => void;
   /** Resolves a row to a playable URL for the DJ's pre-listen. */
   onAudition: (track: SessionTrack) => Promise<string>;
 };
@@ -2224,7 +2235,13 @@ function DJLiveRoom({
               )}
             </div>
           </section>
-          <QueueList tracks={session.tracks} onAudition={onAudition} />
+          <QueueList
+            tracks={session.tracks}
+            onAudition={onAudition}
+            onPlay={(track) => onPlay(track.id, session.nowPlaying?.trackId ?? null)}
+            nowPlayingTrackId={session.nowPlaying?.trackId ?? null}
+            isChangingTrack={isChangingTrack}
+          />
         </section>
       </div>
     </main>
@@ -2478,6 +2495,17 @@ type QueueListProps = {
    * broadcast and nothing else.
    */
   onAudition?: (track: SessionTrack) => Promise<string>;
+  /**
+   * When given, every row gets a Play that puts that song on the room. The
+   * crowd pick stays the one-tap default in the panel above; this is for the
+   * DJ's own call: a request from the floor, a change of mood, a song still
+   * cooling. Cooldown limits votes, not the DJ.
+   */
+  onPlay?: (track: SessionTrack) => void;
+  /** The song on now; its row says so where Play would be. */
+  nowPlayingTrackId?: string | null;
+  /** A change is in flight; Plays wait for it rather than racing it. */
+  isChangingTrack?: boolean;
 };
 
 export function QueueList({
@@ -2488,6 +2516,9 @@ export function QueueList({
   lockSelectedVotes = false,
   onVote,
   onAudition,
+  onPlay,
+  nowPlayingTrackId = null,
+  isChangingTrack = false,
 }: QueueListProps) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playingTrackId, setPlayingTrackId] = useState("");
@@ -2562,12 +2593,18 @@ export function QueueList({
         const hasVote = votedTrackIds.has(track.id);
         const isPending = pendingVotes.has(track.id);
         const played = Boolean(track.playedAt);
-        const cooling = track.cooldown > 0;
+        const onNow = track.id === nowPlayingTrackId;
+        // The song on now was just stamped played, so the cooldown query
+        // counts it as cooling; its row says "on now", not "cooldown".
+        const cooling = track.cooldown > 0 && !onNow;
+        const rowPlayName = onNow
+          ? `${track.title} is on now`
+          : `${cooling ? "Replay" : "Play"} ${track.title}${cooling ? " (on cooldown)" : ""}${track.previewUrl ? "" : " (no audio)"}`;
 
         return (
           <li
             key={track.id}
-            className={`${index === 0 && !cooling ? "is-leading" : ""}${cooling ? " is-played" : ""}`}
+            className={`${index === 0 && !cooling && !onNow ? "is-leading" : ""}${cooling ? " is-played" : ""}${onNow ? " is-on-now" : ""}`}
           >
             <span className="queue-rank">{String(index + 1).padStart(2, "0")}</span>
             {onAudition && track.previewUrl ? (
@@ -2575,7 +2612,7 @@ export function QueueList({
                 type="button"
                 className="queue-art preview-play"
                 onClick={() => void toggleAudition(track)}
-                aria-label={`${playingTrackId === track.id ? "Stop" : "Play"} ${track.title}`}
+                aria-label={`${playingTrackId === track.id ? "Stop pre-listening to" : "Pre-listen to"} ${track.title}`}
                 aria-pressed={playingTrackId === track.id}
               >
                 {loadingTrackId === track.id ? (
@@ -2583,7 +2620,7 @@ export function QueueList({
                 ) : playingTrackId === track.id ? (
                   <Pause size={17} fill="currentColor" />
                 ) : (
-                  <Play size={17} fill="currentColor" />
+                  <Headphones size={18} strokeWidth={2.2} />
                 )}
               </button>
             ) : (
@@ -2597,9 +2634,10 @@ export function QueueList({
                 {track.artist}
                 {cooling
                   ? ` · cooldown: ${track.cooldown} more song${track.cooldown === 1 ? "" : "s"}`
-                  : played
+                  : played && !onNow
                     ? " · played"
                     : ""}
+                {onPlay && !track.previewUrl ? " · no audio" : ""}
               </small>
               <VoterStack voters={track.voters} votes={track.votes} />
             </span>
@@ -2620,8 +2658,35 @@ export function QueueList({
                 <span>{track.votes}</span>
               </button>
             ) : (
-              <span className="vote-total">
-                <ArrowUp size={16} /> {track.votes}
+              <span className="track-actions">
+                <span className="vote-total">
+                  <ArrowUp size={16} /> {track.votes}
+                </span>
+                {onPlay && (
+                  // One element for Play, Replay and On now, so a tap does
+                  // not unmount the control under the DJ's focus; aria-disabled
+                  // rather than disabled for the same reason.
+                  <button
+                    type="button"
+                    className={`row-play${onNow ? " is-on-now" : ""}`}
+                    aria-disabled={onNow || isChangingTrack ? true : undefined}
+                    aria-current={onNow ? "true" : undefined}
+                    aria-label={rowPlayName}
+                    onClick={() => {
+                      if (!onNow && !isChangingTrack) onPlay(track);
+                    }}
+                  >
+                    {onNow ? (
+                      <>
+                        <AudioLines size={14} aria-hidden="true" /> On now
+                      </>
+                    ) : (
+                      <>
+                        <Play size={14} fill="currentColor" /> {cooling ? "Replay" : "Play"}
+                      </>
+                    )}
+                  </button>
+                )}
               </span>
             )}
           </li>

@@ -524,6 +524,11 @@ export function endSession(input: {
  * the crowd's pick — and null takes the current one off. A played song is
  * stamped so it sits out for the cooldown and its votes are spent, and the
  * revision bumps so every guest's next poll carries the change.
+ *
+ * Naming the song that is already on is "unchanged": re-stamping it would
+ * restart every phone mid-song, restart its cooldown and spend its fresh
+ * votes a second time, and the request that does it is usually a booth tab
+ * that had not yet polled the change.
  */
 export function setNowPlaying(input: {
   sessionId: string;
@@ -598,6 +603,7 @@ export function setNowPlaying(input: {
           .prepare("SELECT id FROM tracks WHERE id = ? AND session_id = ?")
           .get(input.trackId, session.id) as { id: string } | undefined;
         if (!track) return "no_track" as const;
+        if (track.id === session.now_playing_track_id) return "unchanged" as const;
         trackId = track.id;
       }
 
