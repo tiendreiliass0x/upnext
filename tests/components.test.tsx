@@ -744,14 +744,12 @@ describe("now playing", () => {
     expect(screen.getByText(/cooldown: 2 more songs/)).toBeInTheDocument();
   });
 
-  it("lets the DJ put the crowd pick on and adopts the returned room", async () => {
-    const user = userEvent.setup();
+  /**
+   * Opens the booth on `room` with nothing playing and answers the next
+   * /now-playing call with `reply`. Returns the calls for assertions.
+   */
+  function openBooth(reply: { session: PublicSession; stale?: boolean }) {
     window.localStorage.setItem("upnext-account-token", "host-token");
-    const played: PublicSession = {
-      ...room,
-      revision: 4,
-      nowPlaying: { ...room.nowPlaying!, trackId: "track-two", title: "Second Track", artist: "Artist B" },
-    };
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     vi.stubGlobal(
       "fetch",
@@ -767,11 +765,23 @@ describe("now playing", () => {
             guestBaseUrl: "https://upnext.example",
           });
         }
-        if (url.endsWith("/now-playing")) return Response.json({ session: played });
+        if (url.endsWith("/now-playing")) return Response.json(reply);
         return Response.json({ session: { ...room, nowPlaying: null } });
       }),
     );
     render(<Dashboard />);
+    return calls;
+  }
+
+  const onTrackTwo: PublicSession = {
+    ...room,
+    revision: 4,
+    nowPlaying: { ...room.nowPlaying!, trackId: "track-two", title: "Second Track", artist: "Artist B" },
+  };
+
+  it("lets the DJ put the crowd pick on and adopts the returned room", async () => {
+    const user = userEvent.setup();
+    const calls = openBooth({ session: onTrackTwo });
 
     const play = await screen.findByRole(
       "button",
@@ -787,53 +797,56 @@ describe("now playing", () => {
     expect(JSON.parse(String(change?.init?.body))).toEqual({ trackId: "next" });
   });
 
-  it("lets the DJ put any row on, a cooling one included, and marks it On now", async () => {
+  it("lets the DJ put any row on, a cooling one included, naming what it saw playing", async () => {
     const user = userEvent.setup();
-    window.localStorage.setItem("upnext-account-token", "host-token");
     // First Track is on cooldown in this room: votes are refused, the DJ is not.
-    const played: PublicSession = {
-      ...room,
-      revision: 4,
-      nowPlaying: { ...room.nowPlaying!, trackId: "track-one", title: "First Track", artist: "Artist A" },
-    };
-    const calls: Array<{ url: string; init?: RequestInit }> = [];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = String(input);
-        calls.push({ url, init });
-        if (url === "/api/accounts") {
-          return Response.json({ account: { id: "host", pseudonym: "DJ", phoneLast4: "1234" } });
-        }
-        if (url === "/api/sessions") {
-          return Response.json({
-            activeRoom: { session: { ...room, nowPlaying: null }, hostKey: "host-key" },
-            guestBaseUrl: "https://upnext.example",
-          });
-        }
-        if (url.endsWith("/now-playing")) return Response.json({ session: played });
-        return Response.json({ session: { ...room, nowPlaying: null } });
-      }),
-    );
-    render(<Dashboard />);
+    const calls = openBooth({
+      session: {
+        ...room,
+        revision: 4,
+        nowPlaying: { ...room.nowPlaying!, trackId: "track-one", title: "First Track", artist: "Artist A" },
+      },
+    });
 
-    const play = await screen.findByRole(
+    const replay = await screen.findByRole(
       "button",
-      { name: "Play First Track (on cooldown)" },
+      { name: "Replay First Track (on cooldown)" },
       { timeout: 3000 },
     );
+    expect(replay).toHaveTextContent("Replay");
     // The crowd pick and the row's own Play are different controls.
     expect(screen.getByRole("button", { name: /play crowd pick: second track/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Play Second Track" })).toBeInTheDocument();
-    await user.click(play);
+    expect(screen.getByRole("button", { name: "Play Second Track" })).toHaveTextContent("Play");
+    await user.click(replay);
 
     await screen.findByText("First Track", { selector: ".now-playing-copy strong" });
     const change = calls.find((call) => call.url.endsWith("/now-playing"));
     expect(change?.init?.method).toBe("POST");
-    expect(JSON.parse(String(change?.init?.body))).toEqual({ trackId: "track-one" });
-    // Its row now says so instead of offering Play again.
-    expect(screen.getByText("On now")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /^play first track/i })).not.toBeInTheDocument();
+    // Nothing was on when the DJ tapped, and the request says so.
+    expect(JSON.parse(String(change?.init?.body))).toEqual({ trackId: "track-one", fromTrackId: null });
+
+    // The same control now says On now, still there under the DJ's focus,
+    // and the row is neither dimmed nor labelled as cooling.
+    const onNow = screen.getByRole("button", { name: "First Track is on now" });
+    expect(onNow).toHaveTextContent("On now");
+    expect(onNow).toHaveAttribute("aria-disabled", "true");
+    expect(onNow).toHaveAttribute("aria-current", "true");
+    expect(onNow.closest("li")).toHaveClass("is-on-now");
+    expect(onNow.closest("li")).not.toHaveClass("is-played");
+    expect(onNow.closest("li")).not.toHaveTextContent(/cooldown/);
+    expect(screen.queryByRole("button", { name: /^(re)?play first track/i })).not.toBeInTheDocument();
+  });
+
+  it("tells the DJ when the room moved on before the tap landed", async () => {
+    const user = userEvent.setup();
+    openBooth({ session: onTrackTwo, stale: true });
+
+    const play = await screen.findByRole("button", { name: "Play Second Track" }, { timeout: 3000 });
+    await user.click(play);
+
+    // The returned room is adopted, and the stale reply is not passed off as success.
+    await screen.findByText("Second Track", { selector: ".now-playing-copy strong" });
+    expect(screen.getByRole("alert")).toHaveTextContent(/moved on before that tap landed/);
   });
 });
 
@@ -910,7 +923,8 @@ describe("the listen-along dock", () => {
   it("gives guests nothing to play: the room hears the broadcast, not the masters", () => {
     render(<QueueList tracks={tracks} />);
     expect(screen.queryByRole("button", { name: /play/i })).not.toBeInTheDocument();
-    expect(document.querySelector("audio")).toBeNull();
+    expect(screen.queryByRole("button", { name: /pre-listen/i })).not.toBeInTheDocument();
+    expect(document.querySelector(".preview-play")).toBeNull();
   });
 });
 

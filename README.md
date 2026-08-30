@@ -183,10 +183,14 @@ The live booth has a **Now playing** panel with one main action: *Play crowd
 pick*, which puts on the top-voted song that is not on cooldown. Every row in
 the queue also has its own *Play*, for the DJ's call rather than the crowd's:
 a request from the floor, a change of mood, a song that is still cooling
-(cooldown limits votes, not the DJ; the button says "on cooldown" so it is a
-choice, not a slip). The row on now says so instead. The DJ can also take a
-song off. Each change stamps the track as played and bumps the room revision,
-so every guest's next poll carries it. The headphones on a row's art are the
+(cooldown limits votes, not the DJ; on a cooling row the button reads
+*Replay*, so it is a choice, not a slip). The row on now says *On now* there
+instead, and a row with no audio says so (phones stay silent on it). A row's
+Play names the song it saw playing, so a tap that lands after another booth
+tab, or auto-advance, has already moved the room does nothing and says so;
+tapping the song that is already on is a no-op. The DJ can also take a song
+off. Each change stamps the track as played and bumps the room revision, so
+every guest's next poll carries it. The headphones on a row's art are the
 DJ's private pre-listen, not the room's speakers.
 
 A played song is not gone for good — people may want to hear it again — but it
