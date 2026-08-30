@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  forwardRef,
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
@@ -283,7 +285,25 @@ export function NowPlayingWaveform({ playing }: { playing: boolean }) {
  * the first tap "unlocks" this one <audio> element for unprompted playback,
  * and unmounting it would make every guest tap again for the next song.
  */
-export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }) {
+type NowPlayingDockHandle = {
+  toggle: () => void;
+};
+
+/** "" while the song is playable; the two ways it can stop being one. */
+export type PlaybackStatus = "" | "failed" | "finished";
+
+export type PlaybackState = {
+  playing: boolean;
+  status: PlaybackStatus;
+};
+
+export const NowPlayingDock = forwardRef<
+  NowPlayingDockHandle,
+  {
+    nowPlaying: NowPlaying | null;
+    onStateChange?: (state: PlaybackState) => void;
+  }
+>(function NowPlayingDock({ nowPlaying, onStateChange }, ref) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Which song this element was last started for, so the effect below does
   // not restart what the tap handler already started synchronously.
@@ -292,7 +312,7 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
   const [isPlaying, setIsPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [status, setStatus] = useState<"" | "failed" | "finished">("");
+  const [status, setStatus] = useState<PlaybackStatus>("");
   const trackId = nowPlaying?.trackId ?? "";
   const previewUrl = nowPlaying?.previewUrl ?? null;
   const startedAt = nowPlaying?.startedAt ?? "";
@@ -334,6 +354,27 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
     });
   }
 
+  function togglePlayback() {
+    const audio = audioRef.current;
+    if (!audio || !previewUrl || status === "finished") return;
+    if (!listening) {
+      start(audio, previewUrl, startedAt);
+      setListening(true);
+    } else if (audio.paused) {
+      claimAudio(audio);
+      audio.play().catch(() => setStatus("failed"));
+    } else {
+      audio.pause();
+    }
+  }
+
+  useImperativeHandle(ref, () => ({ toggle: togglePlayback }));
+
+  useEffect(() => {
+    onStateChange?.({ playing: isPlaying, status });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reports the state, does not depend on the reporter
+  }, [isPlaying, status]);
+
   // Follow later changes of song automatically once the guest has tapped.
   useEffect(() => {
     const audio = audioRef.current;
@@ -368,19 +409,7 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
           className="player-main-button"
           aria-label={isPlaying ? "Pause the DJ's song" : "Listen along"}
           disabled={!previewUrl || status === "finished"}
-          onClick={() => {
-            const audio = audioRef.current;
-            if (!audio || !previewUrl) return;
-            if (!listening) {
-              start(audio, previewUrl, startedAt);
-              setListening(true);
-            } else if (audio.paused) {
-              claimAudio(audio);
-              audio.play().catch(() => setStatus("failed"));
-            } else {
-              audio.pause();
-            }
-          }}
+          onClick={togglePlayback}
         >
           {isPlaying ? <Pause size={18} /> : <Play size={18} />}
         </button>
@@ -424,12 +453,15 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
             const value = event.currentTarget.duration;
             setDuration(Number.isFinite(value) ? value : 0);
           }}
-          onError={() => setStatus("failed")}
+          onError={() => {
+            setStatus("failed");
+            setIsPlaying(false);
+          }}
         />
       </div>
     </div>
   );
-}
+});
 
 export default function Dashboard({
   initialSessionId = "",
@@ -2260,6 +2292,65 @@ type GuestRoomProps = {
   onBackToDJ: () => void;
 };
 
+/**
+ * The song the DJ has on, at the top of the ballot. Taps are handed to the
+ * dock below rather than to an <audio> of its own: one element per guest is
+ * what keeps the browser's playback unlock, so this is a second face on the
+ * same player and has to show the same reasons it can be out of action.
+ */
+function NowPlayingCard({
+  nowPlaying,
+  playback: { playing, status },
+  onToggle,
+}: {
+  nowPlaying: NowPlaying;
+  playback: PlaybackState;
+  onToggle: () => void;
+}) {
+  const { title, artist, previewUrl } = nowPlaying;
+  // Nothing left to tap: no preview at all, or one the room has played past.
+  const unplayable = !previewUrl
+    ? "No audio"
+    : status === "finished"
+      ? "Finished"
+      : "";
+
+  return (
+    <button
+      type="button"
+      className="top-pick top-pick-player"
+      aria-label={
+        !previewUrl
+          ? `${title} has no audio`
+          : status === "finished"
+            ? `${title} has finished`
+            : status === "failed"
+              ? `Retry ${title}`
+              : `${playing ? "Pause" : "Listen to"} ${title}`
+      }
+      disabled={Boolean(unplayable)}
+      onClick={onToggle}
+    >
+      <span className="top-pick-label">
+        <AudioLines size={19} /> Now playing
+      </span>
+      <span className="top-pick-copy">
+        <strong>{title}</strong>
+        <span>{artist}</span>
+      </span>
+      <span className="top-pick-listen" aria-hidden="true">
+        {playing ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}
+        {unplayable ||
+          (status === "failed"
+            ? "Tap to retry"
+            : playing
+              ? "Playing"
+              : "Tap to listen")}
+      </span>
+    </button>
+  );
+}
+
 function GuestRoom({
   session,
   isPreview,
@@ -2271,6 +2362,11 @@ function GuestRoom({
   onVote,
   onBackToDJ,
 }: GuestRoomProps) {
+  const playerRef = useRef<NowPlayingDockHandle>(null);
+  const [playback, setPlayback] = useState<PlaybackState>({
+    playing: false,
+    status: "",
+  });
   if (isLoading) return <LoadingRoom label="Joining the room" />;
 
   const topTrack = session.tracks.find((track) => track.cooldown === 0);
@@ -2304,7 +2400,13 @@ function GuestRoom({
         {topTrack ? ` ${topTrack.title} is ranked first.` : ""}
       </p>
 
-      {topTrack && (
+      {session.nowPlaying ? (
+        <NowPlayingCard
+          nowPlaying={session.nowPlaying}
+          playback={playback}
+          onToggle={() => playerRef.current?.toggle()}
+        />
+      ) : topTrack ? (
         <section className="top-pick">
           <div className="top-pick-label">
             <AudioLines size={19} />
@@ -2318,7 +2420,7 @@ function GuestRoom({
             <ArrowUp size={17} /> {topTrack.votes}
           </div>
         </section>
-      )}
+      ) : null}
 
       <section className="guest-ballot" aria-labelledby="ballot-title">
         <div className="guest-ballot-heading">
@@ -2357,7 +2459,11 @@ function GuestRoom({
           ? "One free vote per room. Add your phone to keep voting."
           : "Tap once per track. The most-voted track stays on top."}
       </p>
-      <NowPlayingDock nowPlaying={session.nowPlaying} />
+      <NowPlayingDock
+        ref={playerRef}
+        nowPlaying={session.nowPlaying}
+        onStateChange={setPlayback}
+      />
     </main>
   );
 }

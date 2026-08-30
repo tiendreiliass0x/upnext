@@ -1177,6 +1177,22 @@ button:active:not(:disabled) {
   color: var(--ink-inverse);
 }
 
+.top-pick-player {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 160ms ease;
+}
+
+.top-pick-player:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--surface-strong) 90%, var(--accent));
+}
+
+.top-pick-player:disabled {
+  cursor: not-allowed;
+}
+
 .top-pick-label {
   grid-column: 1 / -1;
   display: flex;
@@ -1215,6 +1231,19 @@ button:active:not(:disabled) {
   font-family: var(--font-geist-mono), monospace;
   font-size: 14px;
   font-weight: 800;
+}
+
+.top-pick-listen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+  color: var(--accent);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 .track-count {
@@ -1567,12 +1596,17 @@ button:active:not(:disabled) {
     color: #171812;
   }
 
+  .top-pick-player:hover:not(:disabled) {
+    background: color-mix(in srgb, #edede5 90%, var(--accent));
+  }
+
   .top-pick-copy span {
     color: rgba(23, 24, 18, 0.58);
   }
 
   .top-pick-label,
-  .top-pick-votes {
+  .top-pick-votes,
+  .top-pick-listen {
     color: #356044;
   }
 }

@@ -950,6 +950,152 @@ describe("the listen-along dock", () => {
   });
 });
 
+describe("the crowd's now-playing card", () => {
+  function nowPlayingRoom(
+    nowPlaying: Partial<NonNullable<PublicSession["nowPlaying"]>> = {},
+  ): PublicSession {
+    return {
+      id: "ABC123",
+      name: "Room",
+      venue: "",
+      createdAt: new Date().toISOString(),
+      revision: 2,
+      totalVotes: 2,
+      guestCount: 1,
+      votedTrackIds: [],
+      anonymousVoteUsed: false,
+      nowPlaying: {
+        trackId: "track-two",
+        title: "Second Track",
+        artist: "Artist B",
+        previewUrl: "/api/tracks/track-two/preview",
+        startedAt: new Date(Date.now() - 10_000).toISOString(),
+        ...nowPlaying,
+      },
+      voters: [],
+      tracks: [
+        tracks[0],
+        { ...tracks[1], playedAt: new Date().toISOString(), cooldown: 2 },
+      ],
+    };
+  }
+
+  it("shows the live track and controls the same player as the bottom dock", async () => {
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: nowPlayingRoom() })),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    const card = await screen.findByRole("button", {
+      name: "Listen to Second Track",
+    });
+    expect(within(card).getByText("Now playing")).toBeInTheDocument();
+    expect(within(card).getByText("Second Track")).toBeInTheDocument();
+    const dock = screen.getByRole("region", { name: "Now playing" });
+    expect(within(dock).getByText("Second Track")).toBeInTheDocument();
+    expect(document.querySelectorAll("audio")).toHaveLength(1);
+
+    fireEvent.click(card);
+    const audio = document.querySelector("audio");
+    if (!audio) throw new Error("no shared audio element");
+    expect(play).toHaveBeenCalledTimes(1);
+    expect(audio.src).toContain("/api/tracks/track-two/preview");
+
+    fireEvent.play(audio);
+    await waitFor(() =>
+      expect(card).toHaveAccessibleName("Pause Second Track"),
+    );
+    expect(within(card).getByText("Playing")).toBeInTheDocument();
+    expect(
+      within(dock).getByRole("button", { name: "Pause the DJ's song" }),
+    ).toBeInTheDocument();
+  });
+
+  it("goes quiet when the room has played past the preview", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    // The DJ has had it on far longer than the 30s preview runs for.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          session: nowPlayingRoom({
+            startedAt: new Date(Date.now() - 300_000).toISOString(),
+          }),
+        }),
+      ),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    const card = await screen.findByRole("button", {
+      name: "Listen to Second Track",
+    });
+    fireEvent.click(card);
+    const audio = document.querySelector("audio");
+    if (!audio) throw new Error("no shared audio element");
+    Object.defineProperty(audio, "duration", { value: 30, configurable: true });
+    fireEvent.loadedMetadata(audio);
+
+    await waitFor(() =>
+      expect(card).toHaveAccessibleName("Second Track has finished"),
+    );
+    expect(within(card).getByText("Finished")).toBeInTheDocument();
+    expect(card).toBeDisabled();
+  });
+
+  it("offers a retry when the preview will not play", async () => {
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: nowPlayingRoom() })),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    const card = await screen.findByRole("button", {
+      name: "Listen to Second Track",
+    });
+    fireEvent.click(card);
+    const audio = document.querySelector("audio");
+    if (!audio) throw new Error("no shared audio element");
+    fireEvent.error(audio);
+
+    await waitFor(() =>
+      expect(card).toHaveAccessibleName("Retry Second Track"),
+    );
+    expect(within(card).getByText("Tap to retry")).toBeInTheDocument();
+    expect(card).toBeEnabled();
+  });
+
+  it("says so when the live track has no audio at all", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ session: nowPlayingRoom({ previewUrl: null }) }),
+      ),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    const card = await screen.findByRole("button", {
+      name: "Second Track has no audio",
+    });
+    expect(within(card).getByText("No audio")).toBeInTheDocument();
+    expect(card).toBeDisabled();
+  });
+});
+
 describe("the room-wide face stack in the booth", () => {
   it("shows who is in the room under the Crowd queue title", async () => {
     window.localStorage.setItem("upnext-account-token", "host-token");
