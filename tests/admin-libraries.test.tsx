@@ -77,6 +77,54 @@ describe("catalogue uploads", () => {
     expect(catalogued).toHaveLength(1);
   });
 
+  it(
+    "waits out a busy server rather than spending the file's attempts",
+    async () => {
+      let attempts = 0;
+      const { uploadCalls, catalogued } = mountWithUploads(() => {
+        attempts += 1;
+        // Bounced more times than a dropped transfer gets attempts. This is
+        // the shape of the real failure: a large upload the tunnel drops
+        // leaves the server finishing it, so every immediate re-send meets
+        // the one-at-a-time gate until that first one lands.
+        if (attempts <= 3) {
+          return Response.json(
+            { error: "Uploads are busy. Try again in a moment." },
+            { status: 429, headers: { "Retry-After": "1" } },
+          );
+        }
+        return Response.json({ previewKey: "audio/a/b.wav" });
+      });
+
+      await dropOneFile();
+
+      await waitFor(
+        () => expect(screen.getByText("Added 1 song.")).toBeInTheDocument(),
+        { timeout: 15000 },
+      );
+      expect(uploadCalls).toHaveLength(4);
+      expect(catalogued).toHaveLength(1);
+    },
+    20000,
+  );
+
+  it("does not sit through an hourly limit in the middle of a batch", async () => {
+    const { uploadCalls } = mountWithUploads(() =>
+      Response.json(
+        { error: "Too many attempts. Try again in a few minutes." },
+        { status: 429, headers: { "Retry-After": "900" } },
+      ),
+    );
+
+    await dropOneFile();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Too many attempts");
+    // Fifteen minutes is not a gate clearing. The file fails and says so
+    // instead of freezing the batch behind it.
+    expect(uploadCalls).toHaveLength(1);
+  });
+
   it("does not retry a file the server will always reject", async () => {
     const { uploadCalls } = mountWithUploads(() =>
       Response.json({ error: "That file is not a supported audio format." }, { status: 415 }),

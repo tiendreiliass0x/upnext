@@ -217,6 +217,10 @@ button:active:not(:disabled) {
   color: var(--error);
   font-size: 13px;
   font-weight: 650;
+  /* A failed batch names one file per line. Without this the newlines
+     collapse and twelve failures arrive as a single run-on sentence, which
+     is barely more use than the count on its own. */
+  white-space: pre-line;
 }
 
 .error-banner button {
