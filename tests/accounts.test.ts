@@ -74,6 +74,24 @@ describe("accounts", () => {
 });
 
 describe("renaming while in a room", () => {
+  it("refreshes the station name in rooms the account hosts", () => {
+    const host = createAccount({ phone: "+32470005000", pseudonym: "Old DJ" });
+    const created = createSession({
+      name: "Set",
+      venue: "",
+      accountId: host.id,
+      requestId: crypto.randomUUID(),
+      tracks: [{ title: "T", artist: "A" }],
+    });
+    const before = getSession(created.session.id)!;
+
+    updateAccountPseudonym(host, "New DJ");
+
+    const after = getSession(created.session.id)!;
+    expect(after.djName).toBe("New DJ");
+    expect(after.revision).toBe(before.revision + 1);
+  });
+
   it("bumps the revision of every live room the account has voted in, so guests see the new name", () => {
     const host = createAccount({ phone: "+32470005001", pseudonym: "Host" });
     const fan = createAccount({ phone: "+32470005002", pseudonym: "Old Name" });

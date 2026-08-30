@@ -200,17 +200,19 @@ export function updateAccountPseudonym(account: StoredAccount, pseudonym: string
     database
       .prepare("UPDATE accounts SET pseudonym = ?, updated_at = ? WHERE id = ?")
       .run(pseudonym, now, account.id);
-    // The name is on the face stacks of every live room this account has
-    // voted in, and guests poll with a revision-keyed ETag: without a bump
-    // they would keep hearing 304 and showing the old name until someone
-    // else in that room voted.
+    // The name labels every room this account hosts and appears on the face
+    // stacks of rooms they voted in. Guests poll with a revision-keyed ETag:
+    // without a bump they would keep hearing 304 and showing the old name.
     database
       .prepare(
         `UPDATE sessions SET revision = revision + 1
          WHERE ended_at IS NULL AND expires_at > ?
-           AND id IN (SELECT session_id FROM votes WHERE account_id = ?)`,
+            AND (
+              host_account_id = ?
+              OR id IN (SELECT session_id FROM votes WHERE account_id = ?)
+            )`,
       )
-      .run(now, account.id);
+      .run(now, account.id, account.id);
   })();
   return { ...account, pseudonym };
 }

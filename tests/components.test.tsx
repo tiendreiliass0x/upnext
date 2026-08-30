@@ -110,6 +110,7 @@ describe("identity onboarding", () => {
     const session = (votedTrackIds: string[], totalVotes: number): PublicSession => ({
       id: "ABC123",
       name: "Browser Vote Room",
+      djName: "DJ Owl",
       venue: "Test Venue",
       createdAt: "2026-08-26T00:00:00.000Z",
       revision: totalVotes,
@@ -246,6 +247,7 @@ describe("conditional room polling", () => {
   const room = (revision: number): PublicSession => ({
     id: "ABC123",
     name: "Conditional Room",
+    djName: "DJ Owl",
     venue: "Test Venue",
     createdAt: "2026-08-26T00:00:00.000Z",
     revision,
@@ -309,6 +311,7 @@ describe("guest link reachability", () => {
   const hostRoom: PublicSession = {
     id: "ABC123",
     name: "Host Room",
+    djName: "DJ Owl",
     venue: "Test Venue",
     createdAt: "2026-08-26T00:00:00.000Z",
     revision: 0,
@@ -740,6 +743,7 @@ describe("now playing", () => {
   const room: PublicSession = {
     id: "ABC123",
     name: "Room",
+    djName: "DJ Owl",
     venue: "",
     createdAt: "2026-08-26T00:00:00.000Z",
     revision: 3,
@@ -991,6 +995,7 @@ describe("the crowd's now-playing card", () => {
     return {
       id: "ABC123",
       name: "Room",
+      djName: "DJ Owl",
       venue: "",
       createdAt: new Date().toISOString(),
       revision: 2,
@@ -1030,8 +1035,12 @@ describe("the crowd's now-playing card", () => {
     const card = await screen.findByRole("button", {
       name: "Listen to Second Track",
     });
+    expect(screen.getByText("Live · DJ Owl Radio")).toBeInTheDocument();
     expect(within(card).getByText("Now playing")).toBeInTheDocument();
     expect(within(card).getByText("Second Track")).toBeInTheDocument();
+    const cardWaveform = card.querySelector(".waveform");
+    if (!cardWaveform) throw new Error("no card waveform");
+    expect(cardWaveform).not.toHaveClass("is-playing");
     const dock = screen.getByRole("region", { name: "Now playing" });
     expect(within(dock).getByText("Second Track")).toBeInTheDocument();
     expect(document.querySelectorAll("audio")).toHaveLength(1);
@@ -1046,6 +1055,7 @@ describe("the crowd's now-playing card", () => {
     await waitFor(() =>
       expect(card).toHaveAccessibleName("Pause Second Track"),
     );
+    expect(cardWaveform).toHaveClass("is-playing");
     expect(within(card).getByText("Playing")).toBeInTheDocument();
     expect(
       within(dock).getByRole("button", { name: "Pause the DJ's song" }),
@@ -1136,6 +1146,7 @@ describe("the room-wide face stack in the booth", () => {
     const room: PublicSession = {
       id: "ABC123",
       name: "Room",
+      djName: "DJ Owl",
       venue: "",
       createdAt: new Date().toISOString(),
       revision: 1,
@@ -1181,6 +1192,7 @@ describe("the room-wide face stack on the guest page", () => {
     const room: PublicSession = {
       id: "ABC123",
       name: "Room",
+      djName: "DJ Owl",
       venue: "",
       createdAt: new Date().toISOString(),
       revision: 1,
@@ -1248,6 +1260,7 @@ describe("auto-advance in the booth", () => {
     const room: PublicSession = {
       id: "ABC123",
       name: "Room",
+      djName: "DJ Owl",
       venue: "",
       createdAt: "2026-08-26T00:00:00.000Z",
       revision: 3,
@@ -1332,6 +1345,7 @@ describe("auto-advance timing", () => {
     const room: PublicSession = {
       id: "ABC123",
       name: "Room",
+      djName: "DJ Owl",
       venue: "",
       createdAt: "2026-08-26T00:00:00.000Z",
       revision: 3,

@@ -38,6 +38,14 @@ function room(accountId: string, requestId = crypto.randomUUID()) {
 }
 
 describe("sessions", () => {
+  it("identifies the DJ on the public room", () => {
+    const host = account("+32470000096", "DJ Owl");
+    const created = room(host.id, "named-dj-room");
+
+    expect(created.session.djName).toBe("DJ Owl");
+    expect(getSession(created.session.id)?.djName).toBe("DJ Owl");
+  });
+
   it("counts account and anonymous votes per track without leaking across rooms", () => {
     const host = account("+32470000099", "Counter Host");
     const guestOne = account("+32470000098", "Guest One");

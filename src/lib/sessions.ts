@@ -38,6 +38,7 @@ export type NowPlaying = {
 export type PublicSession = {
   id: string;
   name: string;
+  djName: string;
   venue: string;
   createdAt: string;
   revision: number;
@@ -58,6 +59,7 @@ export type PublicSession = {
 type SessionRow = {
   id: string;
   name: string;
+  dj_name: string;
   venue: string;
   created_at: string;
   expires_at: string;
@@ -236,10 +238,11 @@ function getPublicSession(sessionId: string, accountId?: string) {
   return database.transaction(() => {
     const session = database
       .prepare(
-        `SELECT id, name, venue, created_at, expires_at, ended_at, revision,
-                now_playing_track_id, now_playing_started_at
-         FROM sessions
-         WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+        `SELECT s.id, s.name, a.pseudonym AS dj_name, s.venue, s.created_at,
+                s.expires_at, s.ended_at, s.revision,
+                s.now_playing_track_id, s.now_playing_started_at
+         FROM sessions s JOIN accounts a ON a.id = s.host_account_id
+         WHERE s.id = ? AND s.ended_at IS NULL AND s.expires_at > ?`,
       )
       .get(sessionId.toUpperCase(), new Date().toISOString()) as
       | SessionRow
@@ -299,6 +302,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
     return {
       id: session.id,
       name: session.name,
+      djName: session.dj_name,
       venue: session.venue,
       createdAt: session.created_at,
       revision: session.revision,

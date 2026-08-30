@@ -351,7 +351,7 @@ export const NowPlayingDock = forwardRef<
       setStatus("finished");
     };
     claimAudio(audio);
-    audio.play().catch(() => {
+    void Promise.resolve(audio.play()).catch(() => {
       if (startedKeyRef.current === songKey) setStatus("failed");
     });
   }
@@ -364,7 +364,7 @@ export const NowPlayingDock = forwardRef<
       setListening(true);
     } else if (audio.paused) {
       claimAudio(audio);
-      audio.play().catch(() => setStatus("failed"));
+      void Promise.resolve(audio.play()).catch(() => setStatus("failed"));
     } else {
       audio.pause();
     }
@@ -1484,6 +1484,7 @@ export default function Dashboard({
   const previewSession: PublicSession = {
     id: "PREVIEW",
     name: sessionName || "Untitled session",
+    djName: account?.pseudonym ?? "DJ",
     venue,
     createdAt: "",
     revision: 0,
@@ -2341,13 +2342,15 @@ function NowPlayingCard({
         <span>{artist}</span>
       </span>
       <span className="top-pick-listen" aria-hidden="true">
-        {playing ? <Pause size={17} /> : <Play size={17} fill="currentColor" />}
-        {unplayable ||
-          (status === "failed"
-            ? "Tap to retry"
-            : playing
-              ? "Playing"
-              : "Tap to listen")}
+        <NowPlayingWaveform playing={playing} />
+        <span>
+          {unplayable ||
+            (status === "failed"
+              ? "Tap to retry"
+              : playing
+                ? "Playing"
+                : "Tap to listen")}
+        </span>
       </span>
     </button>
   );
@@ -2378,7 +2381,7 @@ function GuestRoom({
       <section className="guest-heading">
         <div>
           <span className={isPreview ? "preview-pill" : "live-pill"}>
-            <span /> {isPreview ? "Crowd preview" : `Live · ${session.id}`}
+            <span /> {isPreview ? "Crowd preview" : `Live · ${session.djName} Radio`}
           </span>
           <h1>{session.name}</h1>
           <p>
