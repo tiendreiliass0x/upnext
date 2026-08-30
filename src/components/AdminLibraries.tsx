@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ListMusic, Plus, Trash2, Upload, X } from "lucide-react";
 import type { Library, LibraryTrack } from "@/lib/libraries";
-import { readJson } from "@/lib/http-client";
+import { fetchWithTimeout, readJson } from "@/lib/http-client";
 
 const adminTokenStorageKey = "upnext-admin-token";
 const accountTokenStorageKey = "upnext-account-token";
@@ -37,6 +37,56 @@ async function fileFingerprint(file: File) {
     for (const byte of input) hash = (hash * 31 + byte) >>> 0;
     return `${hash.toString(16)}-${file.size}`;
   }
+}
+
+
+// How long one file gets before its upload is abandoned. Generous: a long
+// track on venue wifi is slow, not stuck. Without any deadline a stalled
+// connection never settles and the whole batch hangs on it.
+const uploadTimeoutMs = 5 * 60_000;
+// Attempts per file. Measured over the dev tunnel, a run of bulk uploads
+// loses a meaningful share of connections at the transport layer, which is
+// exactly the case a second attempt fixes. Retrying is safe because the
+// upload id is an idempotency key: the server answers a repeat of an id it
+// already stored with the stored key rather than taking a second copy.
+const uploadAttempts = 3;
+// How long a file will sit waiting for the server to be free before it gives
+// up. Sized against an upload rather than against a network hiccup: the thing
+// being waited for is usually this batch's own previous file, which can take
+// minutes on venue wifi.
+const busyCeilingMs = 3 * 60_000;
+// What to wait when the server says it is busy but not how long for.
+const defaultBusyWaitMs = 5_000;
+// Past this, a Retry-After is not the one-at-a-time gate clearing, it is the
+// hourly limiter telling us to come back later. Waiting that out inside a
+// batch would freeze the UI for an hour, so the file fails and says why.
+const busyWaitCapMs = 60_000;
+
+/**
+ * Statuses worth sending the file again. 5xx is the server having a bad
+ * moment. 429 is deliberately absent: it means the server is busy rather
+ * than that the transfer failed, and it is handled by waiting (see
+ * `busyWaitMs`) instead of by spending one of the file's attempts. A
+ * rejected format, an oversized file or a full quota will be rejected
+ * identically forever, so those fail the file immediately.
+ */
+function isRetryableStatus(status: number) {
+  return status >= 500;
+}
+
+function pause(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * How long the server asked us to wait, defaulting when it did not say, and
+ * null when the wait is too long to sit through in the middle of a batch.
+ */
+function busyWaitMs(response: Response) {
+  const seconds = Number(response.headers.get("retry-after"));
+  if (!Number.isFinite(seconds) || seconds <= 0) return defaultBusyWaitMs;
+  if (seconds * 1000 > busyWaitCapMs) return null;
+  return Math.max(seconds * 1000, 1000);
 }
 
 export default function AdminLibraries() {
@@ -210,13 +260,22 @@ export default function AdminLibraries() {
     try {
       for (let index = 0; index < list.length; index += 1) {
         const file = list[index];
-        setStatus(`Creating preview ${index + 1} of ${list.length}`);
         try {
-          await uploadOne(file);
+          await uploadOne(file, (note) => {
+            setStatus(
+              `Creating preview ${index + 1} of ${list.length}` +
+                (note ? ` (${note})` : ""),
+            );
+          });
         } catch (fileError) {
           failures.push(`${file.name}: ${errorMessage(fileError)}`);
         }
       }
+      // Refresh before reporting, not after: a successful loadLibraries
+      // clears the error banner, which would wipe this batch's own list of
+      // what failed. Silently dropping a file the operator watched fail is
+      // worse than any of the failures.
+      await Promise.all([loadTracks(), loadLibraries()]);
       const added = list.length - failures.length;
       setStatus(`Added ${added} song${added === 1 ? "" : "s"}.`);
       if (failures.length > 0) {
@@ -224,7 +283,6 @@ export default function AdminLibraries() {
           `${failures.length} of ${list.length} could not be added.\n${failures.join("\n")}`,
         );
       }
-      await Promise.all([loadTracks(), loadLibraries()]);
     } catch (uploadError) {
       setError(errorMessage(uploadError));
     } finally {
@@ -233,36 +291,90 @@ export default function AdminLibraries() {
     }
   }
 
-  async function uploadOne(file: File) {
-    // Fingerprint the file so a retry after a failure matches the first
-    // attempt's idempotency key.
-    const uploadId = `admin-${selectedId}-${await fileFingerprint(file)}`;
-    const form = new FormData();
-    form.append("file", file);
-    const uploaded = await fetch("/api/uploads", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accountToken}`,
-        // Header values must be Latin-1 and the server ignores IDs over 100
-        // characters, so a filename cannot go in directly: a Japanese title
-        // would throw before the request left the browser and a long one
-        // would silently lose idempotency. A hash of the same inputs is
-        // short, ASCII, and stable across a re-drop of the same file.
-        "x-upnext-upload-id": uploadId,
-      },
-      body: form,
-    });
-    const uploadData = await readJson<{
-      previewKey?: string;
-      error?: string;
-    }>(uploaded);
-    if (!uploaded.ok || !uploadData.previewKey) {
-      throw new Error(uploadData.error || "could not be processed.");
+  /**
+   * Send one file, standing back up from the failures that are worth another
+   * go. Two of them, and they are not the same thing:
+   *
+   *   - The transfer died. Nothing was learned about the file, so send it
+   *     again; three attempts in all.
+   *   - The server is busy. It is not this file's turn yet, so wait for the
+   *     interval the server named and ask again without spending an attempt.
+   *
+   * That distinction is the whole point. A large upload that the tunnel drops
+   * leaves the server still finishing it — the object PUT is deliberately not
+   * tied to the request — so the immediate re-send is met by the one-at-a-time
+   * gate. Counting those against three attempts spaced a second apart failed
+   * the file while the server was seconds from having it, and re-dropping was
+   * the operator's only recourse. Waiting instead costs nothing: the retry
+   * that lands after the gate clears is answered from the idempotency key
+   * before the server reads a byte of the body.
+   */
+  async function sendUpload(
+    file: File,
+    uploadId: string,
+    onProgress: (note: string) => void,
+  ) {
+    let lastError = "could not be processed.";
+    let busyWaited = 0;
+    let attempt = 1;
+    while (attempt <= uploadAttempts) {
+      onProgress(attempt > 1 ? `retry ${attempt - 1}` : "");
+      try {
+        const form = new FormData();
+        form.append("file", file);
+        const uploaded = await fetchWithTimeout(
+          "/api/uploads",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accountToken}`,
+              "x-upnext-upload-id": uploadId,
+            },
+            body: form,
+          },
+          uploadTimeoutMs,
+        );
+        const uploadData = await readJson<{
+          previewKey?: string;
+          error?: string;
+        }>(uploaded);
+        if (uploaded.ok && uploadData.previewKey) return uploadData.previewKey;
+        lastError = uploadData.error || lastError;
+        if (uploaded.status === 429) {
+          const wait = busyWaitMs(uploaded);
+          // A wait longer than the cap, or more waiting than one file is
+          // worth, is not the gate clearing: stop and report what the server
+          // said rather than holding the batch open indefinitely.
+          if (wait === null || busyWaited + wait > busyCeilingMs) break;
+          busyWaited += wait;
+          onProgress("server busy, waiting");
+          await pause(wait);
+          continue;
+        }
+        if (!isRetryableStatus(uploaded.status)) break;
+      } catch (requestError) {
+        lastError = errorMessage(requestError);
+      }
+      if (attempt < uploadAttempts) await pause(attempt * 1000);
+      attempt += 1;
     }
+    throw new Error(lastError);
+  }
+
+  async function uploadOne(file: File, onProgress: (note: string) => void) {
+    // Fingerprint the file so a retry after a failure matches the first
+    // attempt's idempotency key. It travels as a header, and header values
+    // must be Latin-1 while the server ignores IDs over 100 characters, so a
+    // filename cannot go in directly: a Japanese title would throw before the
+    // request left the browser and a long one would silently lose
+    // idempotency. A hash of the same inputs is short, ASCII, and stable
+    // across a re-drop of the same file.
+    const uploadId = `admin-${selectedId}-${await fileFingerprint(file)}`;
+    const previewKey = await sendUpload(file, uploadId, onProgress);
 
     const base = file.name.replace(/\.[^.]+$/, "");
     const [maybeArtist, ...rest] = base.split(" - ");
-    const added = await fetch(
+    const added = await fetchWithTimeout(
       `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
       {
         method: "POST",
@@ -273,12 +385,12 @@ export default function AdminLibraries() {
         body: JSON.stringify({
           title: rest.length > 0 ? rest.join(" - ") : base,
           artist: rest.length > 0 ? maybeArtist : "Unknown artist",
-          previewKey: uploadData.previewKey,
+          previewKey,
         }),
       },
     );
     if (!added.ok) {
-      const data = (await added.json()) as { error?: string };
+      const data = await readJson<{ error?: string }>(added);
       throw new Error(data.error || "could not be catalogued.");
     }
   }

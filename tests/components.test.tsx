@@ -904,6 +904,28 @@ describe("the listen-along dock", () => {
     expect(document.querySelector("audio")?.src).toContain("/api/tracks/t2/preview");
   });
 
+  it("moves the waveform only once this phone is actually playing", () => {
+    const { play } = stubMedia();
+    render(<NowPlayingDock nowPlaying={song("t1", "Opener")} />);
+    const dock = screen.getByRole("region", { name: "Now playing" });
+    const waveform = dock.querySelector(".waveform");
+    if (!waveform) throw new Error("no waveform");
+
+    // Nothing has been tapped, so no sound is coming out of this phone yet.
+    expect(waveform.classList.contains("is-playing")).toBe(false);
+
+    fireEvent.click(within(dock).getByRole("button", { name: "Listen along" }));
+    expect(play).toHaveBeenCalledTimes(1);
+    const audio = document.querySelector("audio");
+    if (!audio) throw new Error("no audio element");
+    fireEvent.play(audio);
+
+    expect(waveform.classList.contains("is-playing")).toBe(true);
+
+    fireEvent.pause(audio);
+    expect(waveform.classList.contains("is-playing")).toBe(false);
+  });
+
   it("does not play a song the room has already finished", () => {
     const { pause } = stubMedia();
     // The DJ put a three-minute song on ten minutes ago.
