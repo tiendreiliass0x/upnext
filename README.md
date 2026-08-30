@@ -260,9 +260,22 @@ the person is still in the room.
 
 QR guests receive a browser voter ID in local storage and can cast one free
 vote per room without onboarding. A second pick asks for a private phone number
-and either account creation or login; both transfer the free vote before saving
-the next one. Clearing browser storage can create a new voter ID, so this is a
-best-effort device limit until phone verification is added.
+and a pseudonym. A new number creates the account; a number that already has
+one logs into it, with its own pseudonym kept — login is phone-only and
+unverified either way, so the sign-up form and the login form clear the same
+bar and a known number is never sent back to "log in instead". The browser's
+free vote carries over to the account unless the browser is already linked to
+another account (a phone passed around a table), in which case there is
+nothing to carry and the login still goes through. Clearing browser storage
+can create a new voter ID, so this is a best-effort device limit until phone
+verification is added.
+
+The account routes are rate limited per client address, and one venue is one
+address: every phone on the wifi shares the NAT, and so does every phone that
+reaches the dev server through the tunnel. The window is therefore sized for
+a room's first quarter hour, and a login that succeeds gives its slot back:
+enumerating numbers is paid for in misses, and a crowd's real logins are not
+misses.
 
 ## Tests
 

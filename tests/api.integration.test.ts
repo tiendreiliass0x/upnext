@@ -281,16 +281,22 @@ describe("account API", () => {
     expect(invalidName.status).toBe(400);
   });
 
-  it("blocks duplicate registration and allows authenticated pseudonym updates", async () => {
+  it("logs a known number in from the sign-up form, keeps its pseudonym, and allows authenticated updates", async () => {
     const registered = await register("+32470000031", "First Name");
-    const takeover = await saveAccount(
+    // Login is phone-only and unverified, so the sign-up form clears the
+    // same bar as the login form: a known number logs in. The typed
+    // pseudonym is dropped — knowing a number must not rename its owner.
+    const sameNumber = await saveAccount(
       request("http://localhost/api/accounts", {
         method: "POST",
         body: { phone: "+32470000031", pseudonym: "Impostor" },
       }),
     );
-    expect(takeover.status).toBe(409);
-    expect(await body<{ token?: string }>(takeover)).not.toHaveProperty("token");
+    expect(sameNumber.status).toBe(200);
+    const loggedIn = await body<AccountResponse & { loggedIn?: boolean }>(sameNumber);
+    expect(loggedIn.loggedIn).toBe(true);
+    expect(loggedIn.token).toBe(registered.token);
+    expect(loggedIn.account.pseudonym).toBe("First Name");
 
     const update = await saveAccount(
       request("http://localhost/api/accounts", {
@@ -600,6 +606,8 @@ describe("session API", () => {
     expect((await body<AccountResponse>(registrationRetry)).token).toBe(
       registered.token,
     );
+    // Without the request ID (a later session on the same phone) the same
+    // number simply logs back in, name intact.
     const permanentRecovery = await saveAccount(
       request("http://localhost/api/accounts", {
         method: "POST",
@@ -607,7 +615,10 @@ describe("session API", () => {
         body: { phone: "+32470000036", pseudonym: "Takeover" },
       }),
     );
-    expect(permanentRecovery.status).toBe(409);
+    expect(permanentRecovery.status).toBe(200);
+    const recovered = await body<AccountResponse>(permanentRecovery);
+    expect(recovered.token).toBe(registered.token);
+    expect(recovered.account.pseudonym).toBe("Phone Guest");
 
     const claimedAnonymousVote = await vote(
       request(`${roomUrl}/vote`, {
@@ -677,7 +688,8 @@ describe("review fixes", () => {
     const created = await body<AccountResponse>(second);
     expect(created.account.pseudonym).toBe("Second");
 
-    // Logging in on that browser still refuses to re-link the voter ID.
+    // Logging in on that browser goes through too; the voter ID stays with
+    // the first account rather than moving, and the login does not need it.
     const login = await loginAccount(
       request("http://localhost/api/accounts/login", {
         method: "POST",
@@ -685,7 +697,8 @@ describe("review fixes", () => {
         body: { phone: "+32470002222" },
       }),
     );
-    expect(login.status).toBe(409);
+    expect(login.status).toBe(200);
+    expect((await body<AccountResponse>(login)).account.pseudonym).toBe("Second");
   });
 
   it("throttles the unauthenticated account routes per address", async () => {
@@ -697,7 +710,7 @@ describe("review fixes", () => {
           body: { phone: "+32470009999" },
         }),
       );
-    for (let index = 0; index < 20; index += 1) {
+    for (let index = 0; index < 100; index += 1) {
       expect((await attempt("203.0.113.9")).status).toBe(404);
     }
     const limited = await attempt("203.0.113.9");
