@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  claimAnonymousVoter,
   createAccount,
   getAccountByCreationRequest,
   getAccountByPhone,
@@ -12,6 +13,7 @@ import { getAccountFromRequest } from "@/lib/auth";
 import {
   getClientAddress,
   rateLimitedResponse,
+  releaseRateLimit,
   takeRateLimit,
 } from "@/lib/rate-limit";
 import {
@@ -31,7 +33,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const retryAfter = takeRateLimit("accounts", getClientAddress(request));
+  const clientAddress = getClientAddress(request);
+  const retryAfter = takeRateLimit("accounts", clientAddress);
   if (retryAfter !== null) return rateLimitedResponse(retryAfter);
 
   try {
@@ -86,13 +89,26 @@ export async function POST(request: Request) {
     const existing = getAccountByPhone(phone);
     const authenticatedAccount = getAccountFromRequest(request);
     if (existing && authenticatedAccount?.id !== existing.id) {
-      return NextResponse.json(
-        {
-          error:
-            "This phone already has an account. Log in instead.",
-        },
-        { status: 409 },
-      );
+      // Login is phone-only and unverified, so a known number on the sign-up
+      // form clears the same bar as the login form: treat it as the login it
+      // is rather than send the guest to find the other form. The pseudonym
+      // typed here is dropped — knowing a number must not rename its owner.
+      // The browser's free vote carries over unless this browser already
+      // belongs to someone else, in which case there is nothing to carry.
+      if (anonymousVoterId) {
+        claimAnonymousVoter({
+          accountId: existing.id,
+          voterId: anonymousVoterId,
+          onLinkedElsewhere: "skip",
+        });
+      }
+      // A login that succeeded is not an enumeration probe.
+      releaseRateLimit("accounts", clientAddress);
+      return NextResponse.json({
+        account: toPublicAccount(existing),
+        token: existing.authToken,
+        loggedIn: true,
+      });
     }
 
     const account = existing

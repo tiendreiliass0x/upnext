@@ -20,9 +20,13 @@ const buckets = registry.upnextRateLimits ?? new Map<string, Bucket>();
 registry.upnextRateLimits = buckets;
 
 export const accountRateLimit = {
-  // Enough for a table of friends signing up behind one NAT; far too few to
-  // enumerate a mobile prefix.
-  limit: 20,
+  // One venue is one NAT: every phone on the wifi, and every phone on the
+  // tunnel through it, shares an address. A club's first quarter hour can
+  // be a hundred sign-ups from that one address, so the window is sized for
+  // a room, not a table. It is still far too few to sweep a mobile prefix,
+  // and a login that succeeds is released (see releaseRateLimit): the
+  // limiter counts probes, and the crowd's real logins are not probes.
+  limit: 100,
   windowMs: 15 * 60 * 1000,
 };
 
@@ -64,6 +68,16 @@ export function takeRateLimit(
   }
   bucket.count += 1;
   return null;
+}
+
+/**
+ * Give back the slot a successful attempt took. Enumeration is paid for in
+ * misses, so only misses need to count; without this a crowd logging in
+ * would spend the venue's window on requests that told an attacker nothing.
+ */
+export function releaseRateLimit(scope: string, key: string) {
+  const bucket = buckets.get(`${scope}:${key}`);
+  if (bucket && bucket.count > 0) bucket.count -= 1;
 }
 
 export function rateLimitedResponse(retryAfterSeconds: number) {

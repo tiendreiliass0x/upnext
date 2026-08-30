@@ -107,20 +107,29 @@ function claimAnonymousVoterInTransaction(
   return true;
 }
 
+/**
+ * Carry a browser's free vote over to an account. A voter ID already linked
+ * to another account is either an error ("throw") or, for a login, simply
+ * nothing to carry over ("skip"): the account is still logged in, exactly as
+ * it would be from a fresh browser. Refusing would lock the second person on
+ * a shared phone out for good.
+ */
 export function claimAnonymousVoter(input: {
   accountId: string;
   voterId: string;
+  onLinkedElsewhere?: "throw" | "skip";
 }) {
   const database = getDatabase();
-  database
-    .transaction(() => {
+  return database
+    .transaction(() =>
       claimAnonymousVoterInTransaction(
         database,
         input.accountId,
         input.voterId,
         new Date().toISOString(),
-      );
-    })
+        input.onLinkedElsewhere ?? "throw",
+      ),
+    )
     .immediate();
 }
 
