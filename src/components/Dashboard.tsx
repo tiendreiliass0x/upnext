@@ -211,6 +211,10 @@ const autoAdvanceGraceMs = 1500;
 // a browser throttling timers in a tab sitting behind the DJ software.
 const autoAdvanceCheckMs = 5000;
 const autoAdvanceProbeAttempts = 5;
+// How far a listening phone may drift from the room before a resume re-seeks
+// rather than carrying on. Loose enough that an ordinary pause and resume is
+// left alone, tight enough that a thirty-second pre-listen is not.
+const roomDriftSeconds = 3;
 
 function disposeAudio(audio: HTMLAudioElement) {
   audio.onended = null;
@@ -289,6 +293,8 @@ export function NowPlayingWaveform({ playing }: { playing: boolean }) {
  */
 type NowPlayingDockHandle = {
   toggle: () => void;
+  /** Carry on with the room's song, if this phone was already following it. */
+  resume: () => void;
 };
 
 /** "" while the song is playable; the two ways it can stop being one. */
@@ -329,11 +335,16 @@ export const NowPlayingDock = forwardRef<
     setIsPlaying(false);
   }
 
+  /** How far into the song the room is, from when the DJ put it on. */
+  function roomOffset(since: string) {
+    return Math.max(0, (Date.now() - Date.parse(since)) / 1000);
+  }
+
   // Start the DJ's song from roughly where the room is. Called straight from
   // the tap handler the first time, because WebKit only honours play() while
   // it is still inside the user gesture; an effect runs too late for that.
   function start(audio: HTMLAudioElement, url: string, since: string) {
-    const offset = Math.max(0, (Date.now() - Date.parse(since)) / 1000);
+    const offset = roomOffset(since);
     startedKeyRef.current = songKey;
     setPosition(0);
     setDuration(0);
@@ -356,6 +367,30 @@ export const NowPlayingDock = forwardRef<
     });
   }
 
+  /**
+   * Pick the room's song back up. Called by the guest's own tap and, when a
+   * pre-listen ends, on their behalf — so it never starts a phone that was
+   * silent to begin with: without `listening` there has been no tap to unlock
+   * playback, and a song already running is left alone.
+   */
+  function resumePlayback() {
+    const audio = audioRef.current;
+    if (!audio || !listening || !audio.paused || status === "finished") return;
+    // The room kept going while this phone did not, so come back to where the
+    // room is rather than where the song was left.
+    const offset = roomOffset(startedAt);
+    if (Number.isFinite(audio.duration) && offset >= audio.duration) {
+      silence(audio);
+      setStatus("finished");
+      return;
+    }
+    if (Math.abs(audio.currentTime - offset) > roomDriftSeconds) {
+      audio.currentTime = offset;
+    }
+    claimAudio(audio);
+    void Promise.resolve(audio.play()).catch(() => setStatus("failed"));
+  }
+
   function togglePlayback() {
     const audio = audioRef.current;
     if (!audio || !previewUrl || status === "finished") return;
@@ -363,14 +398,16 @@ export const NowPlayingDock = forwardRef<
       start(audio, previewUrl, startedAt);
       setListening(true);
     } else if (audio.paused) {
-      claimAudio(audio);
-      void Promise.resolve(audio.play()).catch(() => setStatus("failed"));
+      resumePlayback();
     } else {
       audio.pause();
     }
   }
 
-  useImperativeHandle(ref, () => ({ toggle: togglePlayback }));
+  useImperativeHandle(ref, () => ({
+    toggle: togglePlayback,
+    resume: resumePlayback,
+  }));
 
   useEffect(() => {
     onStateChange?.({ playing: isPlaying, status });
@@ -1271,13 +1308,13 @@ export default function Dashboard({
     window.history.replaceState({}, "", window.location.pathname);
   }
 
-  // The host key goes in a header (never a URL) and the signed R2 URL comes
-  // back as JSON, since an <audio src> cannot carry headers.
+  // Used by the booth and by the crowd alike: a live room serves its own
+  // tracks to anyone holding the link, so this carries no key. The signed R2
+  // URL comes back as JSON because an <audio src> cannot carry headers.
   async function auditionTrack(track: SessionTrack) {
     if (!track.previewUrl) throw new Error("This track has no audio.");
     const response = await fetchWithTimeout(`${track.previewUrl}?as=json`, {
       cache: "no-store",
-      headers: { "x-upnext-host-key": hostKey },
     });
     const data = await readJson<{ url?: string; error?: string }>(response);
     if (!response.ok || !data.url) {
@@ -1668,6 +1705,7 @@ export default function Dashboard({
           isAnonymous={!accountToken}
           anonymousVoteUsed={anonymousVoteUsed}
           onVote={voteForTrack}
+          onAudition={auditionTrack}
           onBackToDJ={() => setView("dj")}
         />
       )}
@@ -2292,6 +2330,8 @@ type GuestRoomProps = {
   isAnonymous: boolean;
   anonymousVoteUsed: boolean;
   onVote: (trackId: string) => void;
+  /** Resolves a row's signed URL so the crowd can hear it before voting. */
+  onAudition: (track: SessionTrack) => Promise<string>;
   onBackToDJ: () => void;
 };
 
@@ -2365,6 +2405,7 @@ function GuestRoom({
   isAnonymous,
   anonymousVoteUsed,
   onVote,
+  onAudition,
   onBackToDJ,
 }: GuestRoomProps) {
   const playerRef = useRef<NowPlayingDockHandle>(null);
@@ -2372,6 +2413,29 @@ function GuestRoom({
     playing: false,
     status: "",
   });
+  // Read while a pre-listen is starting, which is after the dock has already
+  // been paused for it, so the state itself is too late to ask.
+  const wasFollowingRef = useRef(false);
+  // Whether the room's song is owed back at the end of this pre-listen. Only
+  // a phone that was already following the DJ gets it: one that had never
+  // tapped stays quiet rather than being handed a song it did not ask for.
+  const oweRoomRef = useRef(false);
+
+  function reportPlayback(state: PlaybackState) {
+    wasFollowingRef.current = state.playing;
+    setPlayback(state);
+  }
+
+  async function auditionRow(track: SessionTrack) {
+    oweRoomRef.current = wasFollowingRef.current;
+    return onAudition(track);
+  }
+
+  function returnToTheRoom() {
+    if (!oweRoomRef.current) return;
+    oweRoomRef.current = false;
+    playerRef.current?.resume();
+  }
   if (isLoading) return <LoadingRoom label="Joining the room" />;
 
   const topTrack = session.tracks.find((track) => track.cooldown === 0);
@@ -2450,6 +2514,8 @@ function GuestRoom({
             pendingVotes={pendingVotes}
             lockSelectedVotes={isAnonymous}
             onVote={onVote}
+            onAudition={auditionRow}
+            onAuditionEnd={returnToTheRoom}
           />
         ) : (
           <div className="empty-ballot">
@@ -2467,7 +2533,7 @@ function GuestRoom({
       <NowPlayingDock
         ref={playerRef}
         nowPlaying={session.nowPlaying}
-        onStateChange={setPlayback}
+        onStateChange={reportPlayback}
       />
     </main>
   );
@@ -2602,10 +2668,18 @@ type QueueListProps = {
   onVote?: (trackId: string) => void;
   /**
    * When given, rows with audio get a play button that resolves through this
-   * before playing. Only the DJ's live room passes it; guests hear the
-   * broadcast and nothing else.
+   * before playing. The booth and the crowd both pass it: the DJ pre-listens
+   * before putting a song on, the room listens before voting for one. Either
+   * way it plays previewSeconds and stops.
    */
   onAudition?: (track: SessionTrack) => Promise<string>;
+  /**
+   * Called when a pre-listen stops of its own accord or the guest stops it —
+   * the window running out, the file ending, an audio that never loaded. Not
+   * called when another row takes over, which has a pre-listen of its own to
+   * hand the room back at its end.
+   */
+  onAuditionEnd?: () => void;
   /**
    * When given, every row gets a Play that puts that song on the room. The
    * crowd pick stays the one-tap default in the panel above; this is for the
@@ -2627,6 +2701,7 @@ export function QueueList({
   lockSelectedVotes = false,
   onVote,
   onAudition,
+  onAuditionEnd,
   onPlay,
   nowPlayingTrackId = null,
   isChangingTrack = false,
@@ -2653,6 +2728,7 @@ export function QueueList({
     if (!onAudition || !track.previewUrl) return;
     if (playingTrackId === track.id || loadingTrackId === track.id) {
       stopAudition();
+      onAuditionEnd?.();
       return;
     }
 
@@ -2665,6 +2741,7 @@ export function QueueList({
       if (audioRef.current === audio) {
         audioRef.current = null;
         setPlayingTrackId("");
+        onAuditionEnd?.();
       }
     };
     audio.onerror = () => {
@@ -2672,6 +2749,7 @@ export function QueueList({
         audioRef.current = null;
         setLoadingTrackId("");
         setPlayingTrackId("");
+        onAuditionEnd?.();
       }
     };
     // Another player can pause this one when it takes over; the row must not
@@ -2686,6 +2764,7 @@ export function QueueList({
       if (audio.currentTime < previewSeconds) return;
       audio.ontimeupdate = null;
       audio.pause();
+      onAuditionEnd?.();
     };
 
     try {
@@ -2701,6 +2780,7 @@ export function QueueList({
         disposeAudio(audio);
         audioRef.current = null;
         setPlayingTrackId("");
+        onAuditionEnd?.();
       }
     } finally {
       if (audioRef.current === audio) setLoadingTrackId("");

@@ -457,29 +457,32 @@ describe("library picker", () => {
   });
 });
 
-describe("the DJ's pre-listen", () => {
-  class MockAudio {
-    static instances: MockAudio[] = [];
-    src = "";
-    preload = "";
-    currentTime = 0;
-    onended: (() => void) | null = null;
-    onerror: (() => void) | null = null;
-    onpause: (() => void) | null = null;
-    ontimeupdate: (() => void) | null = null;
-    play = vi.fn().mockResolvedValue(undefined);
-    pause = vi.fn();
-    removeAttribute = vi.fn();
-    load = vi.fn();
-    constructor() {
-      MockAudio.instances.push(this);
-    }
+/** Stands in for the element a row builds with `new Audio()`. */
+class MockAudio {
+  static instances: MockAudio[] = [];
+  src = "";
+  preload = "";
+  currentTime = 0;
+  onended: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onpause: (() => void) | null = null;
+  ontimeupdate: (() => void) | null = null;
+  play = vi.fn().mockResolvedValue(undefined);
+  pause = vi.fn();
+  removeAttribute = vi.fn();
+  load = vi.fn();
+  constructor() {
+    MockAudio.instances.push(this);
   }
+}
 
-  beforeEach(() => {
-    MockAudio.instances = [];
-    vi.stubGlobal("Audio", MockAudio);
-  });
+function stubRowAudio() {
+  MockAudio.instances = [];
+  vi.stubGlobal("Audio", MockAudio);
+}
+
+describe("the DJ's pre-listen", () => {
+  beforeEach(stubRowAudio);
 
   it("plays the resolved URL, one row at a time, and ignores stale media events", async () => {
     const user = userEvent.setup();
@@ -980,11 +983,212 @@ describe("the listen-along dock", () => {
     expect(screen.getByRole("button", { name: "Listen along" })).toBeDisabled();
   });
 
-  it("gives guests nothing to play: the room hears the broadcast, not the masters", () => {
+  it("picks the song up where the room is after a pre-listen, not where it was left", () => {
+    const { play } = stubMedia();
+    // The DJ put this on twenty seconds ago (song() default).
+    render(<NowPlayingDock nowPlaying={song("t1", "Opener")} />);
+    const audio = document.querySelector("audio");
+    if (!audio) throw new Error("no audio element");
+    Object.defineProperty(audio, "duration", { configurable: true, value: 180 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Listen along" }));
+    fireEvent.play(audio);
+    // Pre-listening to a row pauses this element (claimAudio), and it is left
+    // sitting five seconds in while the room is twenty seconds along.
+    fireEvent.pause(audio);
+    Object.defineProperty(audio, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 5,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Listen along" }));
+    expect(audio.currentTime).toBeGreaterThan(15);
+    expect(play).toHaveBeenCalledTimes(2);
+  });
+
+  it("says a song is finished rather than resuming one the room has run out of", () => {
+    const { pause } = stubMedia();
+    // A three-minute song the DJ put on ten minutes ago.
+    render(<NowPlayingDock nowPlaying={song("t1", "Opener", 600)} />);
+    const audio = document.querySelector("audio");
+    if (!audio) throw new Error("no audio element");
+
+    fireEvent.click(screen.getByRole("button", { name: "Listen along" }));
+    fireEvent.play(audio);
+    fireEvent.pause(audio);
+    Object.defineProperty(audio, "duration", { configurable: true, value: 180 });
+
+    fireEvent.click(screen.getByRole("button", { name: "Listen along" }));
+    expect(pause).toHaveBeenCalled();
+    expect(screen.getByText(/this one's finished/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Listen along" })).toBeDisabled();
+  });
+
+  it("offers nothing to tap on a row whose audio cannot be resolved", () => {
+    // No onAudition: the DJ's own crowd preview of a room not yet started.
     render(<QueueList tracks={tracks} />);
     expect(screen.queryByRole("button", { name: /play/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /pre-listen/i })).not.toBeInTheDocument();
     expect(document.querySelector(".preview-play")).toBeNull();
+  });
+});
+
+describe("the crowd's pre-listen", () => {
+  const room: PublicSession = {
+    id: "ABC123",
+    name: "Room",
+    djName: "DJ Owl",
+    venue: "",
+    createdAt: new Date().toISOString(),
+    revision: 1,
+    totalVotes: 3,
+    guestCount: 2,
+    votedTrackIds: [],
+    anonymousVoteUsed: false,
+    nowPlaying: null,
+    voters: [],
+    tracks,
+  };
+
+  beforeEach(stubRowAudio);
+
+  it("gives a guest thirty seconds of a ballot row, and asks for it with no key", async () => {
+    const user = userEvent.setup();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes("/preview")) {
+          expect(init?.headers).toBeUndefined();
+          return Response.json({ url: "https://signed.example/track-one" });
+        }
+        return Response.json({ session: room });
+      }),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+    const button = await screen.findByRole(
+      "button",
+      { name: /^pre-listen to first track$/i },
+      { timeout: 3000 },
+    );
+    await user.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+
+    // The room link is the whole credential: no host key goes out with this.
+    expect(calls).toContain("/api/tracks/track-one/preview?as=json");
+    const audio = MockAudio.instances[0];
+    expect(audio.src).toBe("https://signed.example/track-one");
+
+    audio.currentTime = previewSeconds - 1;
+    audio.ontimeupdate?.();
+    expect(audio.pause).not.toHaveBeenCalled();
+
+    audio.currentTime = previewSeconds;
+    audio.ontimeupdate?.();
+    expect(audio.pause).toHaveBeenCalled();
+    audio.onpause?.();
+    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "false"));
+  });
+});
+
+describe("handing the room back after a pre-listen", () => {
+  const roomWithSongOn: PublicSession = {
+    id: "ABC123",
+    name: "Room",
+    djName: "DJ Owl",
+    venue: "",
+    createdAt: new Date().toISOString(),
+    revision: 2,
+    totalVotes: 3,
+    guestCount: 2,
+    votedTrackIds: [],
+    anonymousVoteUsed: false,
+    nowPlaying: {
+      trackId: "track-two",
+      title: "Second Track",
+      artist: "Artist B",
+      previewUrl: "/api/tracks/track-two/preview",
+      startedAt: new Date(Date.now() - 40_000).toISOString(),
+    },
+    voters: [],
+    tracks,
+  };
+
+  /** Opens the guest view on a room with a song on, with row audio stubbed. */
+  function openRoom() {
+    stubRowAudio();
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).includes("/preview?as=json")
+          ? Response.json({ url: "https://signed.example/track-one" })
+          : Response.json({ session: roomWithSongOn }),
+      ),
+    );
+    return { play };
+  }
+
+  async function preListenFirstRow(user: ReturnType<typeof userEvent.setup>) {
+    const button = await screen.findByRole(
+      "button",
+      { name: /^pre-listen to first track$/i },
+      { timeout: 3000 },
+    );
+    await user.click(button);
+    await waitFor(() => expect(button).toHaveAttribute("aria-pressed", "true"));
+    const row = MockAudio.instances[0];
+    // The window runs out, which is what a guest hears as the preview ending.
+    row.currentTime = previewSeconds;
+    row.ontimeupdate?.();
+    expect(row.pause).toHaveBeenCalled();
+    return row;
+  }
+
+  it("picks the DJ's song back up, where the room is now", async () => {
+    const user = userEvent.setup();
+    const { play } = openRoom();
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    const dock = await screen.findByRole("region", { name: "Now playing" }, { timeout: 3000 });
+    await user.click(within(dock).getByRole("button", { name: "Listen along" }));
+    const dockAudio = document.querySelector("audio");
+    if (!dockAudio) throw new Error("no dock audio");
+    fireEvent.play(dockAudio);
+    expect(play).toHaveBeenCalledTimes(1);
+    // Left five seconds in while the room is forty seconds into the song.
+    Object.defineProperty(dockAudio, "currentTime", {
+      configurable: true,
+      writable: true,
+      value: 5,
+    });
+
+    await preListenFirstRow(user);
+
+    // Back to the broadcast without a second tap, and to where the room is
+    // rather than where this phone left the song.
+    expect(play).toHaveBeenCalledTimes(2);
+    expect(dockAudio.currentTime).toBeGreaterThan(35);
+  });
+
+  it("leaves a phone that was not listening quiet", async () => {
+    const user = userEvent.setup();
+    const { play } = openRoom();
+    render(<Dashboard initialSessionId="ABC123" />);
+    await screen.findByRole("region", { name: "Now playing" }, { timeout: 3000 });
+
+    // The dock was never tapped, so the room's song is not owed back.
+    await preListenFirstRow(user);
+
+    expect(play).not.toHaveBeenCalled();
   });
 });
 

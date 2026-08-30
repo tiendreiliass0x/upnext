@@ -843,25 +843,29 @@ export function getAudioUploadByRequest(accountId: string, requestId: string) {
 }
 
 /**
- * Audio for a room track is served while the DJ has that track on — the room
- * listens to what is being broadcast, it does not browse the masters — or to
- * the host, proven by the room's host key, who may pre-listen to any row.
- * Anything else a guest could construct from the payload gets a 404.
+ * Audio for a room track is served to whoever is in the room: the crowd votes
+ * with their ears, so a guest may pre-listen to any row on the ballot, not
+ * only the song on air. The room link is the capability — a track id is only
+ * ever learned from that room's payload — and a room that has ended or
+ * expired serves nothing, so the DJ's set stops being reachable when the
+ * night does.
+ *
+ * This is a link-wide grant, not a per-listener one: the thirty-second window
+ * a pre-listen plays is a clock in the browser (see lib/preview), so anyone
+ * holding the link can pull a whole file out of the signed URL. Bounding that
+ * would mean the preview route streaming a byte range itself instead of
+ * redirecting.
  */
-export function getTrackPreviewKey(
-  trackId: string,
-  options: { hostKey?: string | null } = {},
-) {
+export function getTrackPreviewKey(trackId: string) {
   const row = getDatabase()
     .prepare(
       `SELECT t.preview_key
        FROM tracks t
        JOIN sessions s ON s.id = t.session_id
        WHERE t.id = ? AND t.preview_key IS NOT NULL
-         AND (s.now_playing_track_id = t.id OR s.host_key = ?)
          AND s.ended_at IS NULL AND s.expires_at > ?`,
     )
-    .get(trackId, options.hostKey || "", new Date().toISOString()) as
+    .get(trackId, new Date().toISOString()) as
     | { preview_key: string }
     | undefined;
   return row?.preview_key ?? null;
