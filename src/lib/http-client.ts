@@ -1,10 +1,35 @@
 /**
  * Parse a JSON response body, turning a non-JSON body (an HTML error page from
  * a proxy, a route that is not ready yet) into a readable error instead of a
- * bare `JSON.parse` exception.
+ * bare `JSON.parse` exception. The body has its own deadline because fetch
+ * resolves when the headers arrive, before a stalled response is complete.
  */
-export async function readJson<T>(response: Response): Promise<T> {
-  const text = await response.text();
+export async function readJson<T>(
+  response: Response,
+  timeoutMs = 8000,
+): Promise<T> {
+  const reader = response.body?.getReader();
+  let text = "";
+  if (reader) {
+    const decoder = new TextDecoder();
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      void reader.cancel();
+    }, timeoutMs);
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (timedOut) throw new Error("The connection timed out.");
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+      }
+      text += decoder.decode();
+    } finally {
+      clearTimeout(timer);
+      reader.releaseLock();
+    }
+  }
   try {
     return JSON.parse(text) as T;
   } catch {

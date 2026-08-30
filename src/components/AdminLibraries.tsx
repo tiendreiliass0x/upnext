@@ -119,7 +119,7 @@ export default function AdminLibraries() {
   const loadLibraries = useCallback(async () => {
     if (!adminToken) return;
     try {
-      const response = await fetch("/api/libraries", {
+      const response = await fetchWithTimeout("/api/libraries", {
         cache: "no-store",
         headers: authHeaders(),
       });
@@ -151,7 +151,7 @@ export default function AdminLibraries() {
       return;
     }
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
         { cache: "no-store", headers: authHeaders() },
       );
@@ -188,7 +188,7 @@ export default function AdminLibraries() {
     setIsBusy(true);
     setError("");
     try {
-      const response = await fetch("/api/libraries", {
+      const response = await fetchWithTimeout("/api/libraries", {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ name, description }),
@@ -222,7 +222,7 @@ export default function AdminLibraries() {
     setIsBusy(true);
     setError("");
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `/api/libraries/${encodeURIComponent(library.id)}`,
         { method: "DELETE", headers: authHeaders() },
       );
@@ -399,7 +399,7 @@ export default function AdminLibraries() {
     setIsBusy(true);
     setError("");
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `/api/library-tracks/${encodeURIComponent(track.id)}`,
         { method: "DELETE", headers: authHeaders() },
       );

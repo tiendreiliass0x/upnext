@@ -14,6 +14,15 @@ type R2Registry = typeof globalThis & {
 
 const registry = globalThis as R2Registry;
 
+// Smithy's Node HTTP handler has no request timeout by default. A stalled R2
+// connection would otherwise hold the upload gate forever and block every
+// later catalogue upload until the app process restarted.
+const r2RequestTimeoutMs = 2 * 60_000;
+
+function requestOptions() {
+  return { abortSignal: AbortSignal.timeout(r2RequestTimeoutMs) };
+}
+
 function getR2Configuration() {
   const accountId = process.env.R2_ACCOUNT_ID;
   const accessKeyId = process.env.R2_ACCESS_KEY_ID;
@@ -61,6 +70,7 @@ export async function uploadPreview(
       ContentLength: options.contentLength,
       CacheControl: "private, max-age=31536000, immutable",
     }),
+    requestOptions(),
   );
 }
 
@@ -68,6 +78,7 @@ export async function deletePreview(objectKey: string) {
   const { bucket } = getR2Configuration();
   await getR2Client().send(
     new DeleteObjectCommand({ Bucket: bucket, Key: objectKey }),
+    requestOptions(),
   );
 }
 
@@ -91,6 +102,7 @@ export async function deletePreviews(objectKeys: string[]) {
           Bucket: bucket,
           Delete: { Objects: batch.map((Key) => ({ Key })) },
         }),
+        requestOptions(),
       );
       const rejected = new Set((response.Errors ?? []).map((item) => item.Key));
       batch.forEach((key) => (rejected.has(key) ? failed : deleted).push(key));

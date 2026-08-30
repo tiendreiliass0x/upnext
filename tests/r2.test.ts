@@ -12,8 +12,8 @@ vi.mock("@aws-sdk/client-s3", () => {
       sdkMocks.clientConfig = config;
     }
 
-    send(command: unknown) {
-      return sdkMocks.send(command);
+    send(command: unknown, options?: unknown) {
+      return sdkMocks.send(command, options);
     }
   }
 
@@ -82,6 +82,9 @@ describe("R2 adapter", () => {
       Bucket: "dj-booth",
       Key: "previews/test.mp3",
       ContentType: "audio/mpeg",
+    });
+    expect(sdkMocks.send.mock.calls[0][1]).toEqual({
+      abortSignal: expect.any(AbortSignal),
     });
   });
 
