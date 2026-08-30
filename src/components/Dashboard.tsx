@@ -2031,7 +2031,7 @@ function DJSetup({
 
         <aside className="launch-panel">
           <div className="launch-art" aria-hidden="true">
-            <span>YOU</span>
+            <span>UP</span>
             <AudioLines size={54} strokeWidth={1.3} />
             <span>NEXT</span>
           </div>
