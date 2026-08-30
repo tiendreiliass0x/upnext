@@ -48,43 +48,10 @@ type DraftTrack = {
   id: string;
   title: string;
   artist: string;
-  source: "demo" | "upload" | "playlist" | "library";
+  source: "upload" | "playlist" | "library";
   file?: File;
   previewKey?: string;
 };
-
-const demoTracks: DraftTrack[] = [
-  {
-    id: "demo-1",
-    title: "NUEVAYoL",
-    artist: "Bad Bunny",
-    source: "demo",
-  },
-  {
-    id: "demo-2",
-    title: "Sticky",
-    artist: "Tyler, The Creator",
-    source: "demo",
-  },
-  {
-    id: "demo-3",
-    title: "Guess",
-    artist: "Charli xcx feat. Billie Eilish",
-    source: "demo",
-  },
-  {
-    id: "demo-4",
-    title: "Messy",
-    artist: "Lola Young",
-    source: "demo",
-  },
-  {
-    id: "demo-5",
-    title: "APT.",
-    artist: "ROSÉ & Bruno Mars",
-    source: "demo",
-  },
-];
 
 function createClientId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -220,6 +187,15 @@ function disposeAudio(audio: HTMLAudioElement) {
 // One song at a time, whichever component started it: a guest auditioning a
 // row while the DJ's song is on would otherwise hear both.
 let exclusiveAudio: HTMLAudioElement | null = null;
+/**
+ * The one play() rejection that says nothing is wrong with the audio: every
+ * engine refuses unprompted playback with this same DOMException, and the
+ * cure is a user gesture rather than a different song.
+ */
+function isAutoplayBlocked(error: unknown) {
+  return error instanceof DOMException && error.name === "NotAllowedError";
+}
+
 function claimAudio(audio: HTMLAudioElement) {
   if (exclusiveAudio && exclusiveAudio !== audio) exclusiveAudio.pause();
   exclusiveAudio = audio;
@@ -286,9 +262,15 @@ export function NowPlayingWaveform({ playing }: { playing: boolean }) {
 export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   // Which song this element was last started for, so the effect below does
-  // not restart what the tap handler already started synchronously.
+  // not restart what a gesture handler already started synchronously.
   const startedKeyRef = useRef("");
-  const [listening, setListening] = useState(false);
+  const dockRef = useRef<HTMLDivElement | null>(null);
+  // Opening the room is the request to hear it: there is no "start
+  // listening" state to hold any more. A channel whose music waits behind a
+  // play button is one most guests never hear at all - they open the link,
+  // meet a silent page, and leave. The browser may still refuse the
+  // unprompted start, which is what `blocked` and the gesture below are for.
+  const [blocked, setBlocked] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -307,9 +289,11 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
     setIsPlaying(false);
   }
 
-  // Start the DJ's song from roughly where the room is. Called straight from
-  // the tap handler the first time, because WebKit only honours play() while
-  // it is still inside the user gesture; an effect runs too late for that.
+  // Start the DJ's song from roughly where the room is. The unprompted start
+  // comes from the effect below; when an engine refuses that, the recovery
+  // paths call this straight out of the gesture handler, because WebKit only
+  // honours play() while it is still inside the gesture and an effect
+  // scheduled by it would run too late.
   function start(audio: HTMLAudioElement, url: string, since: string) {
     const offset = Math.max(0, (Date.now() - Date.parse(since)) / 1000);
     startedKeyRef.current = songKey;
@@ -329,15 +313,26 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
       setStatus("finished");
     };
     claimAudio(audio);
-    audio.play().catch(() => {
-      if (startedKeyRef.current === songKey) setStatus("failed");
+    setBlocked(false);
+    // Wrapped because play() is only specified to return a promise in modern
+    // engines; older WebKit (and jsdom) hand back undefined, and an
+    // unprompted start must not throw on the way out.
+    void Promise.resolve(audio.play()).catch((playError: unknown) => {
+      if (startedKeyRef.current !== songKey) return;
+      // Refused for want of a gesture: the song is fine, so arm the next tap
+      // rather than telling the guest it could not be played.
+      if (isAutoplayBlocked(playError)) {
+        setBlocked(true);
+        return;
+      }
+      setStatus("failed");
     });
   }
 
-  // Follow later changes of song automatically once the guest has tapped.
+  // Play whatever the room has on, and follow every later change of song.
   useEffect(() => {
     const audio = audioRef.current;
-    if (!audio || !listening) return;
+    if (!audio) return;
     if (!previewUrl) {
       if (startedKeyRef.current) silence(audio);
       setStatus("");
@@ -346,7 +341,32 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
     if (startedKeyRef.current === songKey) return;
     start(audio, previewUrl, startedAt);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- start/silence are stable per render and keyed by songKey
-  }, [listening, previewUrl, startedAt, songKey]);
+  }, [previewUrl, startedAt, songKey]);
+
+  // A browser that refused the unprompted start will honour a play() made
+  // inside a gesture, so the guest's next interaction anywhere on the page
+  // starts the music - no hunting for the play button. WebKit only counts the
+  // call while it is still inside the handler, so this starts playback
+  // directly rather than flipping a flag for an effect to pick up.
+  useEffect(() => {
+    if (!blocked || !previewUrl) return;
+    const unlock = (event: Event) => {
+      // The dock's own controls already do the right thing. Unlocking from
+      // here as well would race the click handler, which would find the song
+      // already playing and pause what the tap just started.
+      const target = event.target;
+      if (target instanceof Node && dockRef.current?.contains(target)) return;
+      const audio = audioRef.current;
+      if (audio) start(audio, previewUrl, startedAt);
+    };
+    document.addEventListener("pointerdown", unlock);
+    document.addEventListener("keydown", unlock);
+    return () => {
+      document.removeEventListener("pointerdown", unlock);
+      document.removeEventListener("keydown", unlock);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- start is stable per render and keyed by songKey
+  }, [blocked, previewUrl, startedAt, songKey]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -357,6 +377,7 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
 
   return (
     <div
+      ref={dockRef}
       className="player-dock now-playing-dock"
       role="region"
       aria-label="Now playing"
@@ -371,15 +392,18 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
           onClick={() => {
             const audio = audioRef.current;
             if (!audio || !previewUrl) return;
-            if (!listening) {
-              start(audio, previewUrl, startedAt);
-              setListening(true);
-            } else if (audio.paused) {
-              claimAudio(audio);
-              audio.play().catch(() => setStatus("failed"));
-            } else {
+            if (!audio.paused) {
               audio.pause();
+              return;
             }
+            // Nothing is loaded if the unprompted start never got to run;
+            // this tap is the gesture that lets it.
+            if (startedKeyRef.current !== songKey) {
+              start(audio, previewUrl, startedAt);
+              return;
+            }
+            claimAudio(audio);
+            void Promise.resolve(audio.play()).catch(() => setStatus("failed"));
           }}
         >
           {isPlaying ? <Pause size={18} /> : <Play size={18} />}
@@ -396,10 +420,12 @@ export function NowPlayingDock({ nowPlaying }: { nowPlaying: NowPlaying | null }
                 ? " · could not play"
                 : status === "finished"
                   ? " · this one's finished"
-                  : ""}
+                  : blocked
+                    ? " · tap anywhere to listen"
+                    : ""}
           </small>
         </span>
-        {listening && previewUrl && (
+        {previewUrl && !blocked && (
           <>
             <span className="player-progress" aria-hidden="true">
               <span
@@ -445,7 +471,7 @@ export default function Dashboard({
   const [isLive, setIsLive] = useState(Boolean(sharedSessionId));
   const [sessionName, setSessionName] = useState("Friday After Dark");
   const [venue, setVenue] = useState("Room 02");
-  const [draftTracks, setDraftTracks] = useState<DraftTrack[]>(demoTracks);
+  const [draftTracks, setDraftTracks] = useState<DraftTrack[]>([]);
   const [session, setSession] = useState<PublicSession | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(sharedSessionId);
   const [hostKey, setHostKey] = useState("");
@@ -964,11 +990,8 @@ export default function Dashboard({
 
     if (setupLockedRef.current) return;
     setDraftTracks((current) => {
-      const base = current.every((track) => track.source === "demo")
-        ? []
-        : current;
       const knownTracks = new Set(
-        base.map((track) => `${track.artist}-${track.title}`.toLowerCase()),
+        current.map((track) => `${track.artist}-${track.title}`.toLowerCase()),
       );
       const uniqueIncoming = incoming.filter((track) => {
         const key = `${track.artist}-${track.title}`.toLowerCase();
@@ -977,7 +1000,7 @@ export default function Dashboard({
         return true;
       });
 
-      return [...base, ...uniqueIncoming].slice(0, 200);
+      return [...current, ...uniqueIncoming].slice(0, 200);
     });
     setError("");
   }
@@ -985,11 +1008,10 @@ export default function Dashboard({
   function addLibraryTracks(picked: LibraryTrack[]) {
     if (setupLockedRef.current || picked.length === 0) return;
     setDraftTracks((current) => {
-      const base = current.every((track) => track.source === "demo") ? [] : current;
       // A catalogue song already has its preview, so the same song twice would
       // upload nothing but would still queue twice. Library tracks keep the
       // catalogue ID as their draft ID, so that is the key to compare on.
-      const known = new Set(base.map((track) => track.id));
+      const known = new Set(current.map((track) => track.id));
       const additions: DraftTrack[] = [];
       for (const track of picked) {
         const key = track.id;
@@ -1003,7 +1025,7 @@ export default function Dashboard({
           previewKey: track.libraryPreviewKey ?? undefined,
         });
       }
-      return [...base, ...additions].slice(0, 200);
+      return [...current, ...additions].slice(0, 200);
     });
     setError("");
   }
@@ -1571,7 +1593,6 @@ export default function Dashboard({
             )
           }
           onClear={() => !isStarting && setDraftTracks([])}
-          onRestoreDemo={() => !isStarting && setDraftTracks(demoTracks)}
           accountToken={accountToken}
           onAddLibraryTracks={addLibraryTracks}
           onStart={startSession}
@@ -1825,7 +1846,6 @@ type DJSetupProps = {
   onDragChange: (value: boolean) => void;
   onRemoveTrack: (trackId: string) => void;
   onClear: () => void;
-  onRestoreDemo: () => void;
   accountToken: string;
   onAddLibraryTracks: (tracks: LibraryTrack[]) => void;
   onStart: () => void;
@@ -1844,7 +1864,6 @@ function DJSetup({
   onDragChange,
   onRemoveTrack,
   onClear,
-  onRestoreDemo,
   accountToken,
   onAddLibraryTracks,
   onStart,
@@ -2006,16 +2025,11 @@ function DJSetup({
                   <ListMusic size={26} strokeWidth={1.6} />
                   <div>
                     <strong>Your set is empty</strong>
-                    <p>Add files above or restore the example playlist.</p>
+                    <p>
+                      Drop audio files above, or pull songs in from a playlist
+                      or your catalogue.
+                    </p>
                   </div>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={onRestoreDemo}
-                    disabled={isStarting}
-                  >
-                    Restore demo
-                  </button>
                 </div>
               )}
             </div>

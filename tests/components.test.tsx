@@ -644,7 +644,6 @@ describe("starting a room from a playlist", () => {
       await screen.findByDisplayValue("Warm Up Set", {}, { timeout: 3000 }),
     ).toBeInTheDocument();
     expect(screen.getByText("Essence")).toBeInTheDocument();
-    expect(screen.queryByText("NUEVAYoL")).not.toBeInTheDocument();
     const roomCreations = fetchMock.mock.calls.filter(
       ([input, init]) =>
         String(input) === "/api/sessions" && init?.method === "POST",
@@ -652,7 +651,7 @@ describe("starting a room from a playlist", () => {
     expect(roomCreations).toHaveLength(0);
   });
 
-  it("keeps the demo draft and explains when the playlist is not the DJ's", async () => {
+  it("keeps the draft and explains when the playlist is not the DJ's", async () => {
     mountWithPlaylist(() =>
       Response.json({ error: "That playlist could not be found." }, { status: 404 }),
     );
@@ -808,28 +807,48 @@ describe("the listen-along dock", () => {
     return { play, pause };
   }
 
-  it("starts playback inside the first tap, not in a later effect", async () => {
+  it("starts the room's song on arrival, without waiting for a tap", async () => {
     const { play } = stubMedia();
     render(<NowPlayingDock nowPlaying={song("t1", "Opener")} />);
 
-    // fireEvent runs the handler synchronously; a play() that only happened in
-    // an effect would still be called here, so also check it saw the src the
-    // handler set, which the effect path would only set afterwards.
-    const button = screen.getByRole("button", { name: "Listen along" });
+    // Opening the room is the request to hear it: nothing has been clicked.
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
     const audio = document.querySelector("audio");
     if (!audio) throw new Error("no audio element");
-    fireEvent.click(button);
-
-    expect(play).toHaveBeenCalledTimes(1);
     expect(audio.src).toContain("/api/tracks/t1/preview");
+  });
+
+  it("starts on the next gesture anywhere when the browser refuses an unprompted play", async () => {
+    const play = vi
+      .spyOn(HTMLMediaElement.prototype, "play")
+      .mockRejectedValueOnce(
+        new DOMException("gesture required", "NotAllowedError"),
+      )
+      .mockResolvedValue(undefined);
+    vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, "load").mockImplementation(() => {});
+
+    render(<NowPlayingDock nowPlaying={song("t1", "Opener")} />);
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
+
+    // Refused, so the dock says what it is waiting for rather than claiming
+    // the song is broken.
+    const dock = screen.getByRole("region", { name: "Now playing" });
+    await waitFor(() =>
+      expect(dock.textContent).toContain("tap anywhere to listen"),
+    );
+
+    // Any interaction on the page counts, not just the play button.
+    fireEvent.pointerDown(document.body);
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(2));
+    expect(dock.textContent).not.toContain("tap anywhere to listen");
   });
 
   it("stays unlocked across a song being taken off, so the next one follows without a tap", async () => {
     const { play } = stubMedia();
     const { rerender } = render(<NowPlayingDock nowPlaying={song("t1", "Opener")} />);
     const dock = screen.getByRole("region", { name: "Now playing" });
-    fireEvent.click(within(dock).getByRole("button", { name: "Listen along" }));
-    expect(play).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
 
     rerender(<NowPlayingDock nowPlaying={null} />);
     expect(dock).not.toBeVisible();
@@ -842,22 +861,20 @@ describe("the listen-along dock", () => {
     expect(document.querySelector("audio")?.src).toContain("/api/tracks/t2/preview");
   });
 
-  it("moves the waveform only once this phone is actually playing", () => {
+  it("moves the waveform only while sound is actually coming out", async () => {
     const { play } = stubMedia();
     render(<NowPlayingDock nowPlaying={song("t1", "Opener")} />);
     const dock = screen.getByRole("region", { name: "Now playing" });
     const waveform = dock.querySelector(".waveform");
     if (!waveform) throw new Error("no waveform");
 
-    // Nothing has been tapped, so no sound is coming out of this phone yet.
+    // play() has been called, but the element has not reported playing yet.
+    await waitFor(() => expect(play).toHaveBeenCalledTimes(1));
     expect(waveform.classList.contains("is-playing")).toBe(false);
 
-    fireEvent.click(within(dock).getByRole("button", { name: "Listen along" }));
-    expect(play).toHaveBeenCalledTimes(1);
     const audio = document.querySelector("audio");
     if (!audio) throw new Error("no audio element");
     fireEvent.play(audio);
-
     expect(waveform.classList.contains("is-playing")).toBe(true);
 
     fireEvent.pause(audio);
