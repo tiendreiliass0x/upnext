@@ -48,7 +48,7 @@ afterEach(() => {
 });
 
 describe("identity onboarding", () => {
-  it("submits a phone number and self-chosen pseudonym", async () => {
+  it("submits a phone number and self-chosen username", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(undefined);
     render(
@@ -60,7 +60,7 @@ describe("identity onboarding", () => {
     );
 
     await user.type(screen.getByLabelText(/Phone number/), "+32 470 12 34 56");
-    await user.type(screen.getByLabelText(/Pseudonym/), "Night Owl");
+    await user.type(screen.getByLabelText(/Username/), "Night Owl");
     await user.click(screen.getByRole("button", { name: /continue/i }));
 
     await waitFor(() =>
@@ -69,7 +69,7 @@ describe("identity onboarding", () => {
     // Picking a name gets the headline alone: no explanatory line, and
     // nothing about phone numbers beyond the field itself.
     expect(screen.queryByText(/phone number is/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/pseudonym is what/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/username is what/i)).not.toBeInTheDocument();
   });
 
   it("shows account errors without leaving the form", async () => {
@@ -80,12 +80,53 @@ describe("identity onboarding", () => {
     );
 
     await user.type(screen.getByLabelText(/Phone number/), "+32470000000");
-    await user.type(screen.getByLabelText(/Pseudonym/), "Mint Fox");
+    await user.type(screen.getByLabelText(/Username/), "Mint Fox");
     await user.click(screen.getByRole("button", { name: /join room/i }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Phone already registered",
     );
+  });
+
+  it("retries a timed-out account creation with the same request", async () => {
+    const user = userEvent.setup();
+    const accountRequests: string[] = [];
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/accounts" && init?.method === "POST") {
+          accountRequests.push(String(init.body));
+          if (accountRequests.length === 1) {
+            throw new Error("The connection timed out.");
+          }
+          return Response.json({
+            account: {
+              id: "account-retried",
+              pseudonym: "Patient Owl",
+              phoneLast4: "0000",
+            },
+            token: "retried-account-token",
+          });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({ activeRoom: null });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Dashboard />);
+
+    await user.type(await screen.findByLabelText(/Phone number/), "+32470000000");
+    await user.type(screen.getByLabelText(/Username/), "Patient Owl");
+    await user.click(screen.getByRole("button", { name: /continue/i }));
+
+    await waitFor(() => expect(accountRequests).toHaveLength(2));
+    expect(accountRequests[1]).toBe(accountRequests[0]);
+    expect(window.localStorage.getItem("upnext-account-token")).toBe(
+      "retried-account-token",
+    );
+    expect(screen.queryByText("The connection timed out.")).not.toBeInTheDocument();
   });
 
   it("switches to phone-only login", async () => {
@@ -96,7 +137,7 @@ describe("identity onboarding", () => {
     );
 
     await user.click(screen.getByRole("button", { name: "Log in" }));
-    expect(screen.queryByLabelText(/Pseudonym/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/Username/)).not.toBeInTheDocument();
     await user.type(screen.getByLabelText(/Phone number/), "+32470000000");
     await user.click(screen.getByRole("button", { name: "Log in" }));
 

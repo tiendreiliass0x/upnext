@@ -1583,17 +1583,6 @@ button:active:not(:disabled) {
   box-shadow: var(--shadow);
 }
 
-.identity-form-mark {
-  width: 56px;
-  height: 56px;
-  margin-bottom: 4px;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--accent);
-  color: var(--accent-ink);
-}
-
 .identity-form .field > small {
   font-size: 10px;
 }

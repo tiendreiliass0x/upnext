@@ -23,7 +23,6 @@ import {
   Headphones,
   ListMusic,
   Pause,
-  Phone,
   Play,
   Plus,
   QrCode,
@@ -984,23 +983,44 @@ export default function Dashboard({
         accountRequestIdRef.current = createClientId();
       }
     }
-    const response = await fetchWithTimeout("/api/accounts", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(voterId ? { "x-upnext-voter-id": voterId } : {}),
-      },
-      body: JSON.stringify({
-        phone,
-        pseudonym,
-        requestId: accountRequestIdRef.current,
-      }),
-    });
-    const data = (await response.json()) as {
-      account?: PublicAccount;
-      token?: string;
-      error?: string;
+    const submitAccount = async () => {
+      const response = await fetchWithTimeout(
+        "/api/accounts",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(voterId ? { "x-upnext-voter-id": voterId } : {}),
+          },
+          body: JSON.stringify({
+            phone,
+            pseudonym,
+            requestId: accountRequestIdRef.current,
+          }),
+        },
+        15000,
+      );
+      const data = await readJson<{
+        account?: PublicAccount;
+        token?: string;
+        error?: string;
+      }>(response);
+      return { response, data };
     };
+
+    let result: Awaited<ReturnType<typeof submitAccount>>;
+    try {
+      result = await submitAccount();
+    } catch (requestError) {
+      if (
+        !(requestError instanceof Error) ||
+        requestError.message !== "The connection timed out."
+      ) {
+        throw requestError;
+      }
+      result = await submitAccount();
+    }
+    const { response, data } = result;
 
     if (!response.ok || !data.account || !data.token) {
       throw new Error(data.error || "Your profile could not be saved.");
@@ -3306,15 +3326,12 @@ export function IdentityGate({
         ) : afterFreeVote ? (
           <p>
             Your free vote stays in the queue. Add a private phone number and
-            pseudonym to make another pick.
+            username to make another pick.
           </p>
         ) : null}
       </section>
 
       <form className="identity-form" onSubmit={submitIdentity}>
-        <div className="identity-form-mark" aria-hidden="true">
-          <Phone size={28} strokeWidth={1.7} />
-        </div>
         <label className="field">
           <span>Phone number</span>
           <input
@@ -3330,7 +3347,7 @@ export function IdentityGate({
         </label>
         {mode === "create" && (
           <label className="field">
-            <span>Pseudonym</span>
+            <span>Username</span>
             <input
               type="text"
               value={pseudonym}

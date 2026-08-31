@@ -57,7 +57,7 @@ export async function POST(request: Request) {
 
     if (pseudonym.length < 2 || pseudonym.length > 24) {
       return NextResponse.json(
-        { error: "Choose a pseudonym between 2 and 24 characters." },
+        { error: "Choose a username between 2 and 24 characters." },
         { status: 400 },
       );
     }
