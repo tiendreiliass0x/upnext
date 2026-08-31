@@ -2686,7 +2686,7 @@ function TipSheet({
             >
               <QRCode
                 value={session.tipLinks.cashApp}
-                size={104}
+                size={96}
                 bgColor="#ffffff"
                 fgColor="#161711"
                 level="M"
@@ -2696,7 +2696,7 @@ function TipSheet({
             <span className="tip-cash-app-qr-copy">
               <small>Cash App QR</small>
               <strong>Scan to tip {session.djName}</strong>
-              <span>Use another device, or open Cash App below.</span>
+              <span>Check the recipient before sending.</span>
             </span>
           </div>
         )}

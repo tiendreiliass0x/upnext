@@ -1334,7 +1334,7 @@ button:active:not(:disabled) {
   margin-top: 12px;
   padding: 12px;
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
+  grid-template-columns: 128px minmax(0, 1fr);
   align-items: center;
   gap: 14px;
   border: 1px solid var(--line);
@@ -1343,9 +1343,9 @@ button:active:not(:disabled) {
 }
 
 .tip-cash-app-qr-code {
-  width: 120px;
-  height: 120px;
-  padding: 8px;
+  width: 128px;
+  height: 128px;
+  padding: 16px;
   display: grid;
   place-items: center;
   border-radius: 10px;
@@ -1372,6 +1372,7 @@ button:active:not(:disabled) {
 }
 
 .tip-cash-app-qr-copy strong {
+  overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.25;
 }
@@ -1380,6 +1381,17 @@ button:active:not(:disabled) {
   color: var(--muted);
   font-size: 9px;
   line-height: 1.45;
+}
+
+@media (max-width: 380px) {
+  .tip-cash-app-qr {
+    grid-template-columns: minmax(0, 1fr);
+    justify-items: center;
+  }
+
+  .tip-cash-app-qr-copy {
+    text-align: center;
+  }
 }
 
 .tip-providers {

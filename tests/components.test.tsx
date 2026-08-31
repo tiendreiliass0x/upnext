@@ -13,6 +13,12 @@ import Dashboard, {
 import { previewSeconds } from "@/lib/preview";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
+vi.mock("react-qr-code", () => ({
+  default: ({ value }: { value: string }) => (
+    <svg data-encoded-value={value} />
+  ),
+}));
+
 const tracks: SessionTrack[] = [
   {
     id: "track-one",
@@ -772,7 +778,10 @@ describe("external tips", () => {
     const cashAppQr = within(dialog).getByRole("img", {
       name: "Cash App QR code for DJ Owl",
     });
-    expect(cashAppQr.querySelector("svg")).toBeInTheDocument();
+    expect(cashAppQr.querySelector("svg")).toHaveAttribute(
+      "data-encoded-value",
+      "https://cash.app/$DJOwl",
+    );
     expect(within(dialog).getByRole("link", { name: /open cash app/i })).toHaveAttribute(
       "href",
       "https://cash.app/$DJOwl",
