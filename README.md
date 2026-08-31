@@ -18,6 +18,17 @@ and vote the queue into order.
 Local development listens on `:3001`, leaving `:3000` available for the
 separate `upnext-serve` production checkout.
 
+Deploy the latest `main` build to that production checkout with:
+
+```bash
+bun run deploy
+```
+
+The command pulls `~/dev/upnext-serve`, builds in a temporary directory,
+restarts its LaunchAgent, checks port `3000`, and restores the previous build
+if the new one does not become healthy. Set `UPNEXT_SERVE_DIR` when the
+production checkout lives somewhere else.
+
 SQLite defaults to `data/dj-booth.sqlite`. The directory and database are
 created automatically.
 
