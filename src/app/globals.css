@@ -1330,6 +1330,58 @@ button:active:not(:disabled) {
   cursor: pointer;
 }
 
+.tip-cash-app-qr {
+  margin-top: 12px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: var(--surface);
+}
+
+.tip-cash-app-qr-code {
+  width: 120px;
+  height: 120px;
+  padding: 8px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.tip-cash-app-qr-code svg {
+  display: block;
+}
+
+.tip-cash-app-qr-copy {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.tip-cash-app-qr-copy small {
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tip-cash-app-qr-copy strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.tip-cash-app-qr-copy > span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
 .tip-providers {
   margin-top: 12px;
   display: grid;

@@ -2677,6 +2677,30 @@ function TipSheet({
           </button>
         </div>
 
+        {session.tipLinks?.cashApp && (
+          <div className="tip-cash-app-qr">
+            <div
+              className="tip-cash-app-qr-code"
+              role="img"
+              aria-label={`Cash App QR code for ${session.djName}`}
+            >
+              <QRCode
+                value={session.tipLinks.cashApp}
+                size={104}
+                bgColor="#ffffff"
+                fgColor="#161711"
+                level="M"
+                aria-hidden="true"
+              />
+            </div>
+            <span className="tip-cash-app-qr-copy">
+              <small>Cash App QR</small>
+              <strong>Scan to tip {session.djName}</strong>
+              <span>Use another device, or open Cash App below.</span>
+            </span>
+          </div>
+        )}
+
         <div className="tip-providers">
           {session.tipLinks?.cashApp && (
             <a

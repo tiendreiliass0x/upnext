@@ -769,6 +769,10 @@ describe("external tips", () => {
     expect(within(dialog).getByText(/does not change the queue/i)).toBeInTheDocument();
     expect(within(dialog).getByText(/does not verify who owns/i)).toBeInTheDocument();
     expect(within(dialog).getByText(/guarantee/i)).toBeInTheDocument();
+    const cashAppQr = within(dialog).getByRole("img", {
+      name: "Cash App QR code for DJ Owl",
+    });
+    expect(cashAppQr.querySelector("svg")).toBeInTheDocument();
     expect(within(dialog).getByRole("link", { name: /open cash app/i })).toHaveAttribute(
       "href",
       "https://cash.app/$DJOwl",
@@ -801,6 +805,30 @@ describe("external tips", () => {
     await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it("does not show a Cash App QR when the DJ only provides Venmo", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          session: {
+            ...room,
+            tipLinks: { cashApp: null, venmo: room.tipLinks.venmo },
+          },
+        }),
+      ),
+    );
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    await user.click(await screen.findByRole("button", {
+      name: "Open tip options for First Track by Artist A, row 1",
+    }));
+    const dialog = screen.getByRole("dialog", { name: "Tip for this pick" });
+
+    expect(within(dialog).queryByRole("img", { name: /Cash App QR/i })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("link", { name: /open venmo/i })).toBeInTheDocument();
   });
 
   it("sends room-scoped handles at launch and remembers them on this device", async () => {
