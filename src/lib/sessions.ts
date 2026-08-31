@@ -1,4 +1,5 @@
 import { getDatabase } from "@/lib/db";
+import type { ProviderId } from "@/lib/providers/types";
 import {
   normalizeTipHandles,
   tipLinksFor,
@@ -13,6 +14,20 @@ export type SessionTrack = {
   votes: number;
   position: number;
   previewUrl: string | null;
+  artworkUrl: string | null;
+  /**
+   * The song's real length, when the source told us. An imported row
+   * pre-listens through a short clip, so the booth cannot learn the length
+   * from what it plays and would otherwise advance the room after the snippet.
+   */
+  durationMs: number | null;
+  /**
+   * Where an imported row came from. Present only for tracks pulled from a
+   * connected service, and not optional decoration: the provider's terms
+   * require the uploader credited and a visible link back to the track
+   * wherever it is shown, so the ballot needs both to render a row at all.
+   */
+  source: TrackSource | null;
   playedAt: string | null;
   /** Songs that still have to roll before this one can be voted for again. */
   cooldown: number;
@@ -22,6 +37,12 @@ export type SessionTrack = {
    * rest into "+N"; `votes` minus what is shown is the "and N others".
    */
   voters: TrackVoter[];
+};
+
+export type TrackSource = {
+  provider: ProviderId;
+  permalinkUrl: string;
+  uploaderName: string;
 };
 
 /** A pseudonym when the voter has an account; null for a free anonymous vote. */
@@ -38,6 +59,9 @@ export type NowPlaying = {
   title: string;
   artist: string;
   previewUrl: string | null;
+  artworkUrl: string | null;
+  durationMs: number | null;
+  source: TrackSource | null;
   startedAt: string;
 };
 
@@ -84,6 +108,12 @@ type TrackRow = {
   artist: string;
   position: number;
   preview_key: string | null;
+  provider: string | null;
+  provider_track_id: string | null;
+  artwork_url: string | null;
+  permalink_url: string | null;
+  uploader_name: string | null;
+  duration_ms: number | null;
   played_at: string | null;
   cooldown: number;
   votes: number;
@@ -212,8 +242,39 @@ function getRoomVoters(sessionId: string) {
     .all(sessionId, sessionId, roomVoterPreviewLimit) as TrackVoter[];
 }
 
-function trackPreviewUrl(trackId: string, previewKey: string | null) {
-  return previewKey ? `/api/tracks/${encodeURIComponent(trackId)}/preview` : null;
+/**
+ * One route serves both kinds of row. An uploaded song resolves to a signed
+ * R2 URL and an imported one to the provider's clip, but the client only ever
+ * sees "ask this URL for something to play", so nothing downstream of here
+ * branches on where a song came from.
+ */
+function trackPreviewUrl(track: {
+  id: string;
+  preview_key: string | null;
+  provider: string | null;
+  provider_track_id: string | null;
+  permalink_url: string | null;
+}) {
+  // An imported row needs all three: the handle a clip is resolved with, and
+  // the permalink the provider's terms require displayed beside anything of
+  // theirs we play. A row missing any of them is not offered as playable --
+  // otherwise the controls promise audio that 404s, and would start working
+  // with no credit attached the moment the provider recovered.
+  const imported =
+    track.provider && track.provider_track_id && track.permalink_url;
+  const playable = track.preview_key || imported;
+  return playable ? `/api/tracks/${encodeURIComponent(track.id)}/preview` : null;
+}
+
+function trackSource(track: TrackRow): TrackSource | null {
+  // permalink_url is what the terms require alongside the credit, so a row
+  // without one is not shown as coming from anywhere.
+  if (!track.provider || !track.permalink_url) return null;
+  return {
+    provider: track.provider as ProviderId,
+    permalinkUrl: track.permalink_url,
+    uploaderName: track.uploader_name || track.artist,
+  };
 }
 
 const sessionLifetime = 24 * 60 * 60 * 1000;
@@ -264,6 +325,8 @@ function getPublicSession(sessionId: string, accountId?: string) {
     const tracks = database
       .prepare(
         `SELECT t.id, t.title, t.artist, t.position, t.preview_key, t.played_at,
+                 t.provider, t.provider_track_id, t.artwork_url,
+                 t.permalink_url, t.uploader_name, t.duration_ms,
                  ${trackCooldownSql} AS cooldown,
                  COUNT(v.track_id) AS votes
          FROM tracks t
@@ -331,7 +394,10 @@ function getPublicSession(sessionId: string, accountId?: string) {
               trackId: playing.id,
               title: playing.title,
               artist: playing.artist,
-              previewUrl: trackPreviewUrl(playing.id, playing.preview_key),
+              previewUrl: trackPreviewUrl(playing),
+              artworkUrl: playing.artwork_url,
+              durationMs: playing.duration_ms,
+              source: trackSource(playing),
               startedAt: session.now_playing_started_at,
             }
           : null,
@@ -341,7 +407,10 @@ function getPublicSession(sessionId: string, accountId?: string) {
         artist: track.artist,
         votes: track.votes,
         position: track.position,
-        previewUrl: trackPreviewUrl(track.id, track.preview_key),
+        previewUrl: trackPreviewUrl(track),
+        artworkUrl: track.artwork_url,
+        durationMs: track.duration_ms,
+        source: trackSource(track),
         playedAt: track.played_at,
         cooldown: track.cooldown,
         voters: voters.get(track.id) ?? [],
@@ -360,6 +429,17 @@ export function createSession(input: {
     title: string;
     artist: string;
     previewKey?: string | null;
+    /**
+     * Filled in by the route from the provider itself, never by the client:
+     * these are rendered into an anonymous guest's page, so a room author
+     * must not get to choose the host a guest's browser is sent to.
+     */
+    provider?: ProviderId | null;
+    providerTrackId?: string | null;
+    artworkUrl?: string | null;
+    permalinkUrl?: string | null;
+    uploaderName?: string | null;
+    durationMs?: number | null;
   }>;
 }) {
   expireOldSessions();
@@ -442,8 +522,10 @@ export function createSession(input: {
     );
     const insertTrack = database.prepare(
       `INSERT INTO tracks
-        (id, session_id, title, artist, position, preview_key)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+        (id, session_id, title, artist, position, preview_key,
+         provider, provider_track_id, artwork_url, permalink_url,
+         uploader_name, duration_ms)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
 
     input.tracks.forEach((track, position) => {
@@ -451,6 +533,9 @@ export function createSession(input: {
         track.previewKey && canUseUpload.get(track.previewKey, input.accountId)
           ? track.previewKey
           : null;
+      // A row is either an upload or an import; a provider handle without a
+      // track ID is neither, and is stored as neither.
+      const imported = Boolean(track.provider && track.providerTrackId);
       insertTrack.run(
         crypto.randomUUID(),
         id,
@@ -458,6 +543,12 @@ export function createSession(input: {
         track.artist,
         position,
         previewKey,
+        imported ? track.provider : null,
+        imported ? track.providerTrackId : null,
+        imported ? track.artworkUrl ?? null : null,
+        imported ? track.permalinkUrl ?? null : null,
+        imported ? track.uploaderName ?? null : null,
+        imported ? track.durationMs ?? null : null,
       );
     });
     return { id, hostKey };
@@ -908,4 +999,44 @@ export function getTrackPreviewKey(trackId: string) {
     | { preview_key: string }
     | undefined;
   return row?.preview_key ?? null;
+}
+
+/**
+ * The provider handle for an imported row, gated exactly like
+ * getTrackPreviewKey: being a track in a room that is still live is the whole
+ * permission. The host's account comes back with it because resolving a clip
+ * costs a call against that DJ's connection, and there is no other identity
+ * in the request — the guest asking is anonymous.
+ */
+export function getTrackProviderRef(trackId: string) {
+  const row = getDatabase()
+    .prepare(
+      `SELECT t.provider, t.provider_track_id, s.host_account_id
+       FROM tracks t
+       JOIN sessions s ON s.id = t.session_id
+       WHERE t.id = ?
+         AND t.provider IS NOT NULL AND t.provider_track_id IS NOT NULL
+         AND t.permalink_url IS NOT NULL
+         AND s.ended_at IS NULL AND s.expires_at > ?`,
+    )
+    .get(trackId, new Date().toISOString()) as
+    | { provider: string; provider_track_id: string; host_account_id: string }
+    | undefined;
+  if (!row) return null;
+  return {
+    provider: row.provider,
+    providerTrackId: row.provider_track_id,
+    hostAccountId: row.host_account_id,
+  };
+}
+
+/** Whether this host has already opened a room for this request ID. */
+export function hasSessionForRequest(accountId: string, requestId: string) {
+  return Boolean(
+    getDatabase()
+      .prepare(
+        "SELECT 1 FROM sessions WHERE host_account_id = ? AND request_id = ?",
+      )
+      .get(accountId, requestId),
+  );
 }

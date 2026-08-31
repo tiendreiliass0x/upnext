@@ -143,6 +143,42 @@ export function getDatabase() {
       PRIMARY KEY (session_id, voter_id)
     );
 
+    -- A DJ's standing grant against their own account on a music service.
+    -- The tokens are sealed (src/lib/secrets.ts): unlike an auth_token or a
+    -- host_key, these are not capabilities this app issued and can revoke by
+    -- deleting the row, so the row is not allowed to be the whole secret.
+    CREATE TABLE IF NOT EXISTS provider_connections (
+      id TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      provider_user_id TEXT NOT NULL,
+      display_name TEXT NOT NULL DEFAULT '',
+      permalink_url TEXT NOT NULL DEFAULT '',
+      scopes TEXT NOT NULL DEFAULT '',
+      access_token TEXT NOT NULL,
+      refresh_token TEXT,
+      access_expires_at TEXT,
+      -- SoundCloud refresh tokens are single use, so two requests refreshing
+      -- at once would spend the same token twice and kill the connection.
+      -- This column is the claim that serialises them.
+      refreshing_until TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    -- One in-flight OAuth handshake. The provider redirects back with no
+    -- Authorization header, so this row is what binds the callback to the
+    -- account that started it, and its unguessability is the CSRF defence.
+    -- Single use and short lived: it is deleted as it is read.
+    CREATE TABLE IF NOT EXISTS oauth_states (
+      state TEXT PRIMARY KEY,
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      code_verifier TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS sessions_host_idx
       ON sessions(host_account_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS tracks_session_idx
@@ -166,6 +202,10 @@ export function getDatabase() {
     -- Plain index on the child key so removing a catalogue song does not scan.
     CREATE INDEX IF NOT EXISTS playlist_tracks_library_idx
       ON playlist_tracks(library_track_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS provider_connections_account_idx
+      ON provider_connections(account_id, provider);
+    CREATE INDEX IF NOT EXISTS oauth_states_account_idx
+      ON oauth_states(account_id);
     CREATE INDEX IF NOT EXISTS votes_session_idx
       ON votes(session_id);
     CREATE INDEX IF NOT EXISTS anonymous_votes_track_idx
@@ -261,6 +301,21 @@ export function getDatabase() {
   }>;
   if (!trackColumns.some((column) => column.name === "played_at")) {
     database.exec("ALTER TABLE tracks ADD COLUMN played_at TEXT");
+  }
+  // A row imported from a connected service. The provider track ID is the
+  // only durable handle: stream URLs expire well inside a room's 24 hours, so
+  // they are resolved per request and never stored. uploader_name and
+  // permalink_url are not decoration -- SoundCloud's API terms require the
+  // uploader credited and a visible backlink wherever a track is shown.
+  if (!trackColumns.some((column) => column.name === "provider")) {
+    database.exec(`
+      ALTER TABLE tracks ADD COLUMN provider TEXT;
+      ALTER TABLE tracks ADD COLUMN provider_track_id TEXT;
+      ALTER TABLE tracks ADD COLUMN artwork_url TEXT;
+      ALTER TABLE tracks ADD COLUMN permalink_url TEXT;
+      ALTER TABLE tracks ADD COLUMN uploader_name TEXT;
+      ALTER TABLE tracks ADD COLUMN duration_ms INTEGER;
+    `);
   }
   const uploadColumns = database.pragma("table_info(audio_uploads)") as Array<{
     name: string;

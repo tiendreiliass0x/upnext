@@ -27,6 +27,9 @@ const tracks: SessionTrack[] = [
     votes: 2,
     position: 0,
     previewUrl: "/api/tracks/track-one/preview",
+    artworkUrl: null,
+    durationMs: null,
+    source: null,
     playedAt: null,
     cooldown: 0,
     voters: [],
@@ -38,6 +41,9 @@ const tracks: SessionTrack[] = [
     votes: 1,
     position: 1,
     previewUrl: "/api/tracks/track-two/preview",
+    artworkUrl: null,
+    durationMs: null,
+    source: null,
     playedAt: null,
     cooldown: 0,
     voters: [],
@@ -609,6 +615,48 @@ describe("the DJ's pre-listen", () => {
   });
 });
 
+describe("credit on an imported row", () => {
+  const imported: SessionTrack[] = [
+    {
+      ...tracks[0],
+      source: {
+        provider: "soundcloud",
+        permalinkUrl: "https://soundcloud.com/djowl/night-bus",
+        uploaderName: "DJ Owl",
+      },
+    },
+  ];
+
+  it("names the uploader and the service, and links back to the track", () => {
+    // Required by the provider's terms wherever its content is shown, so it
+    // is a test rather than a styling detail.
+    render(<QueueList tracks={imported} />);
+
+    const credit = screen.getByRole("link", { name: /DJ Owl on SoundCloud/ });
+    expect(credit).toHaveAttribute(
+      "href",
+      "https://soundcloud.com/djowl/night-bus",
+    );
+    expect(credit).toHaveAttribute("target", "_blank");
+    expect(credit).toHaveAttribute("rel", expect.stringContaining("noopener"));
+  });
+
+  it("leaves an uploaded row uncredited", () => {
+    render(<QueueList tracks={tracks} />);
+    expect(screen.queryByRole("link", { name: /on SoundCloud/ })).toBeNull();
+  });
+
+  it("still offers a pre-listen on an imported row", async () => {
+    const onAudition = vi.fn(async () => "https://cf-preview.sndcdn.com/p.mp3");
+    render(<QueueList tracks={imported} onAudition={onAudition} />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /Pre-listen to First Track/ }),
+    );
+    expect(onAudition).toHaveBeenCalled();
+  });
+});
+
 describe("queue interactions", () => {
   it("exposes vote count and selected state accessibly", async () => {
     const user = userEvent.setup();
@@ -660,6 +708,58 @@ describe("queue interactions", () => {
     expect(screen.getAllByText("Tip for this pick")).toHaveLength(2);
     await user.click(button);
     expect(onTip).toHaveBeenCalledWith(tracks[0]);
+  });
+});
+
+describe("connected sources in the setup form", () => {
+  function setupBooth(connections: unknown[]) {
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/accounts") {
+          return Response.json({
+            account: { id: "host", pseudonym: "DJ Owl", phoneLast4: "1234" },
+          });
+        }
+        if (url === "/api/libraries") return Response.json({ libraries: [] });
+        if (url === "/api/connections") {
+          return Response.json({
+            available: [
+              { provider: "soundcloud", label: "SoundCloud", unavailableReason: null },
+            ],
+            connections,
+          });
+        }
+        if (url.includes("/playlists")) return Response.json({ playlists: [] });
+        return Response.json({ activeRoom: null, guestBaseUrl: null });
+      }),
+    );
+    render(<Dashboard />);
+  }
+
+  it("offers to connect a service where the DJ adds the music", async () => {
+    setupBooth([]);
+    expect(
+      await screen.findByRole(
+        "button",
+        { name: "Connect SoundCloud" },
+        { timeout: 3000 },
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("names the connected account instead of asking again", async () => {
+    setupBooth([
+      { provider: "soundcloud", label: "SoundCloud", displayName: "DJ Owl" },
+    ]);
+    expect(
+      await screen.findByText(/SoundCloud · DJ Owl/, {}, { timeout: 3000 }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Connect SoundCloud" }),
+    ).toBeNull();
   });
 });
 
@@ -1066,6 +1166,9 @@ describe("now playing", () => {
       title: "First Track",
       artist: "Artist A",
       previewUrl: "/api/tracks/track-one/preview",
+      artworkUrl: null,
+      durationMs: null,
+      source: null,
       startedAt: new Date(Date.now() - 20_000).toISOString(),
     },
     tracks: [
@@ -1203,6 +1306,9 @@ describe("the listen-along dock", () => {
     title,
     artist: "Artist",
     previewUrl: `/api/tracks/${trackId}/preview`,
+    artworkUrl: null,
+    durationMs: null,
+    source: null,
     startedAt: new Date(Date.now() - secondsAgo * 1000).toISOString(),
   });
 
@@ -1420,6 +1526,9 @@ describe("handing the room back after a pre-listen", () => {
       title: "Second Track",
       artist: "Artist B",
       previewUrl: "/api/tracks/track-two/preview",
+      artworkUrl: null,
+      durationMs: null,
+      source: null,
       startedAt: new Date(Date.now() - 40_000).toISOString(),
     },
     voters: [],
@@ -1521,6 +1630,9 @@ describe("the crowd's now-playing card", () => {
         title: "Second Track",
         artist: "Artist B",
         previewUrl: "/api/tracks/track-two/preview",
+        artworkUrl: null,
+        durationMs: null,
+        source: null,
         startedAt: new Date(Date.now() - 10_000).toISOString(),
         ...nowPlaying,
       },
@@ -1790,6 +1902,9 @@ describe("auto-advance in the booth", () => {
         title: "First Track",
         artist: "Artist A",
         previewUrl: "/api/tracks/track-one/preview",
+        artworkUrl: null,
+        durationMs: null,
+        source: null,
         // Put on a minute ago: a 30-second song is long over.
         startedAt: new Date(Date.now() - 60_000).toISOString(),
       },
@@ -1856,7 +1971,11 @@ describe("auto-advance in the booth", () => {
 });
 
 describe("auto-advance timing", () => {
-  function mountBooth(options: { startedSecondsAgo: number; serverDate?: Date }) {
+  function mountBooth(options: {
+    startedSecondsAgo: number;
+    serverDate?: Date;
+    durationMs?: number | null;
+  }) {
     window.localStorage.setItem("upnext-account-token", "host-token");
     const room: PublicSession = {
       id: "ABC123",
@@ -1876,6 +1995,9 @@ describe("auto-advance timing", () => {
         title: "First Track",
         artist: "Artist A",
         previewUrl: "/api/tracks/track-one/preview",
+        artworkUrl: null,
+        durationMs: options.durationMs ?? null,
+        source: null,
         startedAt: new Date(Date.now() - options.startedSecondsAgo * 1000).toISOString(),
       },
       tracks: [{ ...tracks[0], playedAt: "2026-08-26T00:00:00.000Z", cooldown: 2 }, tracks[1]],
@@ -1924,8 +2046,39 @@ describe("auto-advance timing", () => {
         });
       },
       advances: () => calls.filter((call) => call.url.endsWith("/now-playing")),
+      probed: () =>
+        created.filter((audio) =>
+          audio.src.endsWith("/api/tracks/track-one/preview"),
+        ),
     };
   }
+
+  it("follows an imported song's real length, not its preview clip", async () => {
+    // The regression this guards: an imported row pre-listens through a clip
+    // of about thirty seconds, so probing what it plays would cut a
+    // four-minute track off after the snippet while the DJ is still on it.
+    const booth = mountBooth({ startedSecondsAgo: 60, durationMs: 240_000 });
+    await screen.findByText(
+      "First Track",
+      { selector: ".now-playing-copy strong" },
+      { timeout: 3000 },
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(booth.advances()).toHaveLength(0);
+    // And it did not go looking: the length was already known.
+    expect(booth.probed()).toHaveLength(0);
+  });
+
+  it("advances once an imported song's real length has run out", async () => {
+    const booth = mountBooth({ startedSecondsAgo: 300, durationMs: 240_000 });
+    await waitFor(() => expect(booth.advances()).not.toHaveLength(0), {
+      timeout: 3000,
+    });
+    expect(
+      JSON.parse(String(booth.advances()[0].init?.body)),
+    ).toMatchObject({ trackId: "next", fromTrackId: "track-one" });
+  });
 
   it("waits while the song is still going", async () => {
     const booth = mountBooth({ startedSecondsAgo: 5 });

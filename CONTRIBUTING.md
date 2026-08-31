@@ -16,6 +16,18 @@ Imperative subject line under 72 characters that says what changes, not what
 you did: "Cap uploads at 60 MB", not "updated route". Put the reasoning and
 the trade-offs in the body — the PR template asks for the same thing.
 
+## Design docs
+
+A change that closes off an option — picking one provider over another, ruling
+a whole approach out, accepting a constraint you cannot lift — gets a file in
+[`docs/`](docs/). Start from [`docs/TEMPLATE.md`](docs/TEMPLATE.md) and add it
+to the index.
+
+The test is whether someone would otherwise re-litigate it in three months.
+Most changes do not need one; the ones that do are obvious in hindsight and
+expensive to reconstruct. Keep the *why* there and the *how to run it* in the
+README.
+
 ## Before you push
 
 ```sh

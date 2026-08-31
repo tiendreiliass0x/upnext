@@ -40,8 +40,14 @@ import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import { fetchWithTimeout, readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import { previewSeconds } from "@/lib/preview";
+import {
+  providerLabels,
+  type ProviderId,
+  type ProviderTrack,
+} from "@/lib/providers/types";
+import SourcePicker from "@/components/SourcePicker";
 import { tipHandleError } from "@/lib/tips";
-import type { NowPlaying } from "@/lib/sessions";
+import type { NowPlaying, TrackSource } from "@/lib/sessions";
 import type { PublicSession, SessionTrack, TrackVoter } from "@/lib/sessions";
 
 type AppView = "dj" | "guest";
@@ -56,9 +62,17 @@ type DraftTrack = {
   id: string;
   title: string;
   artist: string;
-  source: "demo" | "upload" | "playlist" | "library";
+  source: "demo" | "upload" | "playlist" | "library" | "soundcloud";
   file?: File;
   previewKey?: string;
+  // Set only for a row picked from a connected service. The server re-reads
+  // the track from the provider at launch and writes its own copy of the
+  // metadata, so what is here is for showing the DJ what they picked.
+  provider?: ProviderId;
+  providerTrackId?: string;
+  artworkUrl?: string | null;
+  permalinkUrl?: string;
+  uploaderName?: string;
 };
 
 const demoTracks: DraftTrack[] = [
@@ -1123,6 +1137,35 @@ export default function Dashboard({
     setError("");
   }
 
+  function addProviderTracks(picked: ProviderTrack[], provider: ProviderId) {
+    if (setupLockedRef.current || picked.length === 0) return;
+    setDraftTracks((current) => {
+      const base = current.every((track) => track.source === "demo") ? [] : current;
+      // The provider's own ID is the draft ID, so picking the same song out of
+      // two playlists queues it once, the way the library picker behaves.
+      const known = new Set(base.map((track) => track.id));
+      const additions: DraftTrack[] = [];
+      for (const track of picked) {
+        const key = `${provider}:${track.providerTrackId}`;
+        if (known.has(key)) continue;
+        known.add(key);
+        additions.push({
+          id: key,
+          title: track.title,
+          artist: track.artist,
+          source: "soundcloud",
+          provider,
+          providerTrackId: track.providerTrackId,
+          artworkUrl: track.artworkUrl,
+          permalinkUrl: track.permalinkUrl,
+          uploaderName: track.uploaderName,
+        });
+      }
+      return [...base, ...additions].slice(0, 200);
+    });
+    setError("");
+  }
+
   async function startSession() {
     if (setupLockedRef.current) return;
     if (!accountToken) {
@@ -1208,17 +1251,25 @@ export default function Dashboard({
           cashAppHandle,
           venmoHandle,
           requestId: sessionRequestIdRef.current,
-          tracks: preparedTracks.map(({ title, artist, previewKey }) => ({
-            title,
-            artist,
-            previewKey,
-          })),
+          // Only the handle travels for an imported row. The server reads
+          // the title, artwork and link back from the service itself, so a
+          // tampered body cannot decide what a guest's browser loads.
+          tracks: preparedTracks.map(
+            ({ title, artist, previewKey, provider, providerTrackId }) => ({
+              title,
+              artist,
+              previewKey,
+              provider,
+              providerTrackId,
+            }),
+          ),
         }),
       });
       const data = (await response.json()) as {
         session?: PublicSession;
         hostKey?: string;
         guestBaseUrl?: string | null;
+        skippedTracks?: number;
         error?: string;
       };
 
@@ -1246,6 +1297,14 @@ export default function Dashboard({
       setIsLive(true);
       setRoomMissing(false);
       setRoomError("");
+      // Songs the service will not let anyone play were dropped server-side.
+      // The room is open either way, but a shorter ballot than the DJ built
+      // needs saying out loud rather than being noticed mid-set.
+      if (data.skippedTracks) {
+        setError(
+          `${data.skippedTracks} song${data.skippedTracks === 1 ? "" : "s"} could not be played here and ${data.skippedTracks === 1 ? "was" : "were"} left out.`,
+        );
+      }
     } catch (startError) {
       setError(getErrorMessage(startError));
     } finally {
@@ -1451,11 +1510,20 @@ export default function Dashboard({
   const playingTrackId = session?.nowPlaying?.trackId ?? null;
   const playingStartedAt = session?.nowPlaying?.startedAt ?? null;
   const playingPreviewUrl = session?.nowPlaying?.previewUrl ?? null;
+  // What the source said the song runs for. An imported row pre-listens
+  // through a clip of about previewSeconds, so probing what it plays would
+  // time the room to the snippet and cut a four-minute track off after thirty
+  // seconds while the DJ is still playing it.
+  const playingDurationMs = session?.nowPlaying?.durationMs ?? null;
   useEffect(() => {
-    if (!isLive || !hostKey || !playingTrackId || !playingStartedAt || !playingPreviewUrl) {
-      return;
-    }
-    let endsAt: number | null = null;
+    if (!isLive || !hostKey || !playingTrackId || !playingStartedAt) return;
+    if (!playingDurationMs && !playingPreviewUrl) return;
+
+    // A stated length is authoritative and costs no round trip; the probe is
+    // for uploads, where the file itself is the only source of the length.
+    let endsAt: number | null = playingDurationMs
+      ? Date.parse(playingStartedAt) + playingDurationMs + autoAdvanceGraceMs
+      : null;
     let probe: HTMLAudioElement | null = null;
     let probeAttempts = 0;
 
@@ -1470,7 +1538,9 @@ export default function Dashboard({
       if (endsAt === null) {
         // No length yet: the probe failed or is still loading. Try again a
         // few times, then leave it to the DJ.
-        if (!probe && probeAttempts < autoAdvanceProbeAttempts) startProbe();
+        if (!probe && probeAttempts < autoAdvanceProbeAttempts && playingPreviewUrl) {
+          startProbe();
+        }
         return;
       }
       if (Date.now() + serverClockOffsetRef.current < endsAt) return;
@@ -1495,16 +1565,24 @@ export default function Dashboard({
       element.onerror = () => {
         if (probe === element) dropProbe();
       };
-      element.src = playingPreviewUrl;
+      element.src = playingPreviewUrl as string;
     };
 
-    startProbe();
+    if (endsAt === null) startProbe();
+    else check();
     const interval = window.setInterval(check, autoAdvanceCheckMs);
     return () => {
       window.clearInterval(interval);
       dropProbe();
     };
-  }, [isLive, hostKey, playingTrackId, playingStartedAt, playingPreviewUrl]);
+  }, [
+    isLive,
+    hostKey,
+    playingTrackId,
+    playingStartedAt,
+    playingPreviewUrl,
+    playingDurationMs,
+  ]);
 
   async function endCurrentSession() {
     if (!activeSessionId || !hostKey || isEnding) return;
@@ -1602,6 +1680,15 @@ export default function Dashboard({
       votes: 0,
       position,
       previewUrl: null,
+      artworkUrl: track.artworkUrl ?? null,
+      durationMs: null,
+      source: track.permalinkUrl
+        ? {
+            provider: "soundcloud" as const,
+            permalinkUrl: track.permalinkUrl,
+            uploaderName: track.uploaderName ?? track.artist,
+          }
+        : null,
       playedAt: null,
       cooldown: 0,
       voters: [],
@@ -1721,6 +1808,7 @@ export default function Dashboard({
           onRestoreDemo={() => !isStarting && setDraftTracks(demoTracks)}
           accountToken={accountToken}
           onAddLibraryTracks={addLibraryTracks}
+          onAddProviderTracks={addProviderTracks}
           onStart={startSession}
           />
         )
@@ -1980,6 +2068,7 @@ type DJSetupProps = {
   onRestoreDemo: () => void;
   accountToken: string;
   onAddLibraryTracks: (tracks: LibraryTrack[]) => void;
+  onAddProviderTracks: (tracks: ProviderTrack[], provider: ProviderId) => void;
   onStart: () => void;
 };
 
@@ -2003,6 +2092,7 @@ function DJSetup({
   onRestoreDemo,
   accountToken,
   onAddLibraryTracks,
+  onAddProviderTracks,
   onStart,
 }: DJSetupProps) {
   // Said under the field it belongs to, while the DJ is still looking at it:
@@ -2088,6 +2178,12 @@ function DJSetup({
                 accountToken={accountToken}
                 disabled={isStarting}
                 onAdd={onAddLibraryTracks}
+              />
+
+              <SourcePicker
+                accountToken={accountToken}
+                disabled={isStarting}
+                onAdd={onAddProviderTracks}
               />
 
               <label
@@ -2514,6 +2610,7 @@ function NowPlayingCard({
       : "";
 
   return (
+    <>
     <button
       type="button"
       className="top-pick top-pick-player"
@@ -2548,6 +2645,12 @@ function NowPlayingCard({
         </span>
       </span>
     </button>
+    {nowPlaying.source && (
+      <p className="top-pick-source">
+        <TrackAttribution source={nowPlaying.source} />
+      </p>
+    )}
+    </>
   );
 }
 
@@ -3063,6 +3166,29 @@ type QueueListProps = {
   isChangingTrack?: boolean;
 };
 
+/**
+ * The credit an imported row has to carry.
+ *
+ * Not styling: SoundCloud's API terms require the uploader named, the service
+ * named, and a visible link back to the track on soundcloud.com anywhere its
+ * content is shown. So this ships with the row rather than after it, and the
+ * row renders it wherever a track appears.
+ */
+export function TrackAttribution({ source }: { source: TrackSource | null }) {
+  if (!source) return null;
+  return (
+    <a
+      className="track-source"
+      href={source.permalinkUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      <ExternalLink size={12} aria-hidden="true" />
+      {source.uploaderName} on {providerLabels[source.provider]}
+    </a>
+  );
+}
+
 export function QueueList({
   tracks,
   interactive = false,
@@ -3209,6 +3335,7 @@ export function QueueList({
                     : ""}
                 {onPlay && !track.previewUrl ? " · no audio" : ""}
               </small>
+              <TrackAttribution source={track.source} />
               <VoterStack voters={track.voters} votes={track.votes} />
               {interactive && hasVote && onTip && (
                 <button
