@@ -16,3 +16,4 @@
 - [ ] `bun run test:coverage`, `bunx tsc --noEmit`, `bun run lint` pass locally
 - [ ] Schema changes migrate an existing database (see `src/lib/db.ts`)
 - [ ] README updated if behaviour or configuration changed
+- [ ] Design doc in `docs/` if this rules an approach in or out

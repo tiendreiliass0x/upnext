@@ -162,6 +162,43 @@ Cleanup treats a library entry as a claim on its preview, so catalogue audio
 outlives the rooms that used it. Deleting the entry releases the claim, and the
 next run reclaims the object.
 
+## Connected Accounts
+
+A DJ can link their own SoundCloud account and build a room from playlists they
+already made, instead of re-uploading the set. The picker sits beside the
+library picker in setup step 02.
+
+Set `SOUNDCLOUD_CLIENT_ID`, `SOUNDCLOUD_CLIENT_SECRET`, `TOKEN_ENCRYPTION_KEY`
+and `APP_PUBLIC_URL`. With any of them missing the picker reports itself
+unavailable rather than showing a button that cannot work.
+
+Registration is self-serve at
+<https://developers.soundcloud.com/docs/api/register-app>, but it requires an
+active SoundCloud Artist Pro subscription. The redirect URI must be registered
+there character for character and is derived from `APP_PUBLIC_URL` as
+`<APP_PUBLIC_URL>/api/connections/soundcloud/callback` — in development,
+`http://127.0.0.1:3001/api/connections/soundcloud/callback`.
+
+Generate the sealing key with:
+
+```sh
+node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+```
+
+Rotating it does not corrupt anything: existing connections read as
+disconnected and the DJ connects again.
+
+Imported rows are read back from the service at launch, pre-listen serves the
+provider's clip through the same `/api/tracks/:id/preview` route uploads use,
+and every row carries the uploader's name and a link back to the track — that
+last one is a condition of the API terms.
+
+**Spotify is deliberately not supported.** The quota ceiling and the Developer
+Policy are why, not the technology.
+
+Full reasoning, the alternatives weighed, and what is deferred:
+[docs/0001-connected-music-accounts.md](docs/0001-connected-music-accounts.md).
+
 ## Play
 
 `/play` is the listening side of the catalogue. Search every library at once,

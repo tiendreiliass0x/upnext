@@ -26,10 +26,12 @@ export default defineConfig({
       reporter: ["text", "json-summary", "html"],
       reportsDirectory: "./coverage",
       include: [
-        "src/lib/{accounts,admin,auth,cleanup,config,db,libraries,playlists,sessions,audio,r2,voters}.ts",
+        "src/lib/{accounts,admin,auth,cleanup,config,connections,db,libraries,playlists,provider-preview,secrets,sessions,audio,r2,voters}.ts",
+        "src/lib/providers/*.ts",
         "src/app/api/**/*.ts",
         "src/components/Dashboard.tsx",
         "src/components/PlayConsole.tsx",
+        "src/components/SourcePicker.tsx",
       ],
       exclude: ["src/app/api/**/*.d.ts"],
       thresholds: {

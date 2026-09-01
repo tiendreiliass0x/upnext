@@ -2106,6 +2106,41 @@ button:active:not(:disabled) {
   font-size: 13px;
 }
 
+/* Add-to-set and Disconnect share a row: one is the point of the picker, the
+   other is a rare correction, so they are not given the same weight. */
+.source-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* The credit an imported row carries. Required wherever the track is shown,
+   so it is styled to be read rather than to be got out of the way: a real
+   link, underlined on hover, at the size of the artist line above it. */
+.track-source {
+  width: fit-content;
+  margin-top: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted-strong);
+  font-size: 11px;
+  line-height: 1.3;
+  text-decoration: none;
+}
+
+.track-source:hover,
+.track-source:focus-visible {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+.top-pick-source {
+  margin: 6px 2px 0;
+}
+
 .admin-page {
   display: flex;
   flex-direction: column;
