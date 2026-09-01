@@ -201,8 +201,9 @@ Full reasoning, the alternatives weighed, and what is deferred:
 
 ## Play
 
-`/play` is the listening side of the catalogue. Search every library at once,
-audition songs inline, and collect them into playlists. The song currently
+`/play` is the listening side of the catalogue. Open one uploaded catalogue on
+its own from the sidebar or search every one of them at once, listen to songs
+inline, and collect them into playlists. The song currently
 playing stays docked at the bottom of the page with transport controls and a
 progress bar, and playback advances through whatever list it was started from.
 
@@ -226,7 +227,10 @@ bearer header, so the player asks for the signed URL as JSON (`?as=json`) and
 sets that on the element. The redirect form still works for anything that
 follows redirects.
 
-Songs play in full, so a playlist here is a listenable set, not just an audition.
+Songs play in full here, so a playlist is a listenable set rather than an
+audition, and the dock counts against the whole song. The thirty-second window
+is the crowd's: in the booth a row is a taste of something they are voting on,
+which is a different job from a DJ listening to their own catalogue.
 
 ## Now Playing
 

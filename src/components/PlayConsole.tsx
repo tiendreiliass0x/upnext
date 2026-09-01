@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
+  Library as LibraryIcon,
   ListMusic,
   Pause,
   Play,
@@ -14,14 +15,16 @@ import {
   X,
 } from "lucide-react";
 import { readJson } from "@/lib/http-client";
-import type { CatalogueTrack } from "@/lib/libraries";
+import type { CatalogueTrack, Library, LibraryTrack } from "@/lib/libraries";
 import type { Playlist, PlaylistTrack } from "@/lib/playlists";
-import { previewSeconds } from "@/lib/preview";
 
 const accountTokenStorageKey = "upnext-account-token";
 
 type Row = CatalogueTrack | PlaylistTrack;
-type View = { kind: "search" } | { kind: "playlist"; id: string };
+type View =
+  | { kind: "search" }
+  | { kind: "library"; id: string }
+  | { kind: "playlist"; id: string };
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
@@ -36,6 +39,9 @@ function formatTime(seconds: number) {
 export default function PlayConsole() {
   const [token, setToken] = useState<string | null>(null);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const [libraries, setLibraries] = useState<Library[]>([]);
+  const libraryNameRef = useRef(new Map<string, string>());
+  libraryNameRef.current = new Map(libraries.map((l) => [l.id, l.name]));
   const [view, setView] = useState<View>({ kind: "search" });
   const [rows, setRows] = useState<Row[]>([]);
   const [query, setQuery] = useState("");
@@ -89,6 +95,28 @@ export default function PlayConsole() {
     void loadPlaylists();
   }, [loadPlaylists]);
 
+  // The catalogue is one searchable pool, but it is made of named shelves the
+  // DJ uploaded, and they want to open one on its own.
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch("/api/libraries", {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await readJson<{ libraries?: Library[] }>(response);
+        if (!cancelled && data.libraries) setLibraries(data.libraries);
+      } catch {
+        // Not fatal: the flat catalogue still works without the shelves.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
   // Rows follow the view: catalogue search, or one playlist's contents.
   useEffect(() => {
     if (!token) return;
@@ -103,7 +131,9 @@ export default function PlayConsole() {
             const url =
               view.kind === "search"
                 ? `/api/catalogue?q=${encodeURIComponent(query)}`
-                : `/api/playlists/${encodeURIComponent(view.id)}`;
+                : view.kind === "library"
+                  ? `/api/libraries/${encodeURIComponent(view.id)}/tracks?q=${encodeURIComponent(query)}`
+                  : `/api/playlists/${encodeURIComponent(view.id)}`;
             const response = await fetch(url, {
               cache: "no-store",
               headers: authHeaders(),
@@ -116,7 +146,17 @@ export default function PlayConsole() {
               throw new Error(data.error || "Songs could not be loaded.");
             }
             if (!cancelled) {
-              setRows(data.tracks);
+              // A library answers with its own tracks, which carry no library
+              // name; the view already knows which shelf this is.
+              const named =
+                view.kind === "library"
+                  ? (data.tracks as LibraryTrack[]).map((track) => ({
+                      ...track,
+                      libraryName:
+                        libraryNameRef.current.get(view.id) ?? "Catalogue",
+                    }))
+                  : data.tracks;
+              setRows(named as Row[]);
               setError("");
             }
           } catch (loadError) {
@@ -124,7 +164,7 @@ export default function PlayConsole() {
           }
         })();
       },
-      view.kind === "search" && query ? 250 : 0,
+      (view.kind === "search" || view.kind === "library") && query ? 250 : 0,
     );
     return () => {
       cancelled = true;
@@ -201,9 +241,9 @@ export default function PlayConsole() {
     void playAt(list, index);
   }
 
-  // The end of a pre-listen, whether the file ran out or the window did: the
-  // console moves on the way it always has, and simply stops on the last row.
-  function endPreview() {
+  // The song ran out: move on the way the console always has, and simply stop
+  // on the last row.
+  function playNext() {
     audioRef.current?.pause();
     step(1);
   }
@@ -302,9 +342,11 @@ export default function PlayConsole() {
     }
   }
 
-  // The dock counts down the pre-listen, not the song: a five-minute track
-  // whose window is thirty seconds should fill the bar in thirty seconds.
-  const previewWindow = duration > 0 ? Math.min(duration, previewSeconds) : 0;
+  // /play is where a DJ listens to their own catalogue, so the bar counts the
+  // whole song. The thirty-second window belongs to the crowd's pre-listen in
+  // the booth, where a row is a taste of something they are voting on; here a
+  // playlist is meant to be listenable end to end.
+  const songLength = duration > 0 ? duration : 0;
 
   if (token === null) return null;
 
@@ -331,6 +373,13 @@ export default function PlayConsole() {
     view.kind === "playlist"
       ? playlists.find((item) => item.id === view.id) ?? null
       : null;
+  const activeLibrary =
+    view.kind === "library"
+      ? libraries.find((item) => item.id === view.id) ?? null
+      : null;
+  // Both the whole catalogue and one shelf are searched on the server; a
+  // playlist is a fixed list the DJ built and is shown whole.
+  const isSearchable = view.kind === "search" || view.kind === "library";
 
   return (
     <div className={`upnext-app ${current ? "has-dock" : ""}`}>
@@ -355,6 +404,40 @@ export default function PlayConsole() {
 
       <main className="page-shell play-layout">
         <aside className="play-sidebar">
+          <h2>Catalogue</h2>
+          <ul className="play-playlists">
+            <li className={view.kind === "search" ? "is-active" : ""}>
+              <button type="button" onClick={() => setView({ kind: "search" })}>
+                <ListMusic size={15} />
+                <span className="track-copy">
+                  <strong>Everything</strong>
+                  <small>Search every catalogue</small>
+                </span>
+              </button>
+            </li>
+            {libraries.map((library) => (
+              <li
+                key={library.id}
+                className={
+                  view.kind === "library" && view.id === library.id ? "is-active" : ""
+                }
+              >
+                <button
+                  type="button"
+                  onClick={() => setView({ kind: "library", id: library.id })}
+                >
+                  <LibraryIcon size={15} />
+                  <span className="track-copy">
+                    <strong>{library.name}</strong>
+                    <small>
+                      {library.trackCount} song{library.trackCount === 1 ? "" : "s"}
+                    </small>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+
           <h2>Playlists</h2>
           <form className="play-new" onSubmit={createPlaylist}>
             <input
@@ -372,15 +455,6 @@ export default function PlayConsole() {
           </form>
 
           <ul className="play-playlists">
-            <li className={view.kind === "search" ? "is-active" : ""}>
-              <button type="button" onClick={() => setView({ kind: "search" })}>
-                <ListMusic size={15} />
-                <span className="track-copy">
-                  <strong>Catalogue</strong>
-                  <small>Search everything</small>
-                </span>
-              </button>
-            </li>
             {playlists.map((playlist) => (
               <li
                 key={playlist.id}
@@ -416,7 +490,9 @@ export default function PlayConsole() {
 
         <section className="play-main">
           <div className="play-main-head">
-            <h1>{activePlaylist ? activePlaylist.name : "Catalogue"}</h1>
+            <h1>
+              {activePlaylist?.name ?? activeLibrary?.name ?? "Catalogue"}
+            </h1>
             {activePlaylist && rows.length > 0 && (
               <Link
                 className="primary-button"
@@ -425,12 +501,16 @@ export default function PlayConsole() {
                 Start a room from this playlist
               </Link>
             )}
-            {view.kind === "search" && (
+            {isSearchable && (
               <input
                 type="search"
                 className="library-search"
                 placeholder="Search title or artist"
-                aria-label="Search the catalogue"
+                aria-label={
+                  activeLibrary
+                    ? `Search ${activeLibrary.name}`
+                    : "Search the catalogue"
+                }
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
               />
@@ -439,11 +519,13 @@ export default function PlayConsole() {
 
           {rows.length === 0 ? (
             <p className="library-empty">
-              {view.kind === "search"
-                ? query
-                  ? "No songs match that search."
-                  : "The catalogue is empty."
-                : "This playlist has no songs yet. Find some in the catalogue."}
+              {query
+                ? "No songs match that search."
+                : view.kind === "playlist"
+                  ? "This playlist has no songs yet. Find some in the catalogue."
+                  : activeLibrary
+                    ? "This catalogue is empty."
+                    : "The catalogue is empty."}
             </p>
           ) : (
             <ol className="play-rows">
@@ -467,7 +549,7 @@ export default function PlayConsole() {
                         {row.previewUrl ? "" : " · no preview"}
                       </small>
                     </span>
-                    {view.kind === "search" ? (
+                    {view.kind !== "playlist" ? (
                       playlists.length > 0 && (
                         <select
                           className="play-add"
@@ -516,13 +598,9 @@ export default function PlayConsole() {
         preload="none"
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
-        onTimeUpdate={(event) => {
-          const at = event.currentTarget.currentTime;
-          setPosition(at);
-          if (at >= previewSeconds) endPreview();
-        }}
+        onTimeUpdate={(event) => setPosition(event.currentTarget.currentTime)}
         onDurationChange={(event) => setDuration(event.currentTarget.duration)}
-        onEnded={endPreview}
+        onEnded={playNext}
         onError={() => setError("That preview could not be played.")}
       />
 
@@ -573,12 +651,12 @@ export default function PlayConsole() {
             <span className="player-progress" aria-hidden="true">
               <span
                 style={{
-                  width: `${previewWindow > 0 ? Math.min(100, (position / previewWindow) * 100) : 0}%`,
+                  width: `${songLength > 0 ? Math.min(100, (position / songLength) * 100) : 0}%`,
                 }}
               />
             </span>
             <span className="player-time">
-              {formatTime(position)}{previewWindow > 0 ? ` / ${formatTime(previewWindow)}` : ""}
+              {formatTime(position)}{songLength > 0 ? ` / ${formatTime(songLength)}` : ""}
             </span>
 
             <button
