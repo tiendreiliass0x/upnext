@@ -6,7 +6,6 @@ SERVE_DIR=${UPNEXT_SERVE_DIR:-"$HOME/dev/upnext-serve"}
 SERVICE_LABEL=${UPNEXT_SERVICE_LABEL:-com.younext.upnext-serve}
 SERVICE_TARGET="gui/$(id -u)/$SERVICE_LABEL"
 HEALTH_URL=${UPNEXT_HEALTH_URL:-http://127.0.0.1:3000/}
-NVM_SCRIPT=${NVM_DIR:-"$HOME/.nvm"}/nvm.sh
 
 fail() {
   echo "upnext-deploy: $*" >&2
@@ -14,23 +13,17 @@ fail() {
 }
 
 # The standalone bundle carries native modules compiled against whichever node
-# built it, and the LaunchAgent starts the server on its own pinned Node. The
-# terminal running a deploy often defaults to a different major, which fails the
-# build outright or, worse, ships a bundle the service cannot load, so take the
-# version from the .nvmrc of the revision being deployed instead of trusting
-# whatever node comes first in PATH.
-use_project_node() {
+# builds it, and the LaunchAgent starts the server on its own Node 24, so a
+# build on another major ships a bundle the service cannot load. Providing the
+# right Node is the environment's job -- nvm's default alias and this project's
+# .nvmrc both say 24 -- so this only refuses to build when it is wrong, rather
+# than reaching into the shell to correct it.
+require_project_node() {
   [ -f .nvmrc ] || fail "the deployed revision has no .nvmrc to build against"
-  if [ -s "$NVM_SCRIPT" ]; then
-    . "$NVM_SCRIPT"
-    nvm use >/dev/null ||
-      fail "nvm has no Node matching .nvmrc; run 'nvm install' in $SERVE_DIR"
-  fi
   WANTED_MAJOR=$(sed 's/^v//; s/[^0-9].*$//; q' .nvmrc)
-  if [ -n "$WANTED_MAJOR" ]; then
-    [ "$(node -v | sed 's/^v//; s/\..*$//')" = "$WANTED_MAJOR" ] ||
-      fail "the build needs Node $WANTED_MAJOR and this shell has $(node -v)"
-  fi
+  [ -n "$WANTED_MAJOR" ] || fail "could not read a Node version from .nvmrc"
+  [ "$(node -v | sed 's/^v//; s/\..*$//')" = "$WANTED_MAJOR" ] ||
+    fail "the build needs Node $WANTED_MAJOR and this shell has $(node -v); run 'nvm use' and deploy again"
   echo "upnext-deploy: building on $(node -v)"
 }
 
@@ -80,7 +73,7 @@ if [ -f "$SERVE_DIR/.env" ]; then
 fi
 (
   cd "$BUILD_DIR"
-  use_project_node
+  require_project_node
   bun install --frozen-lockfile
   bun run build
 )
