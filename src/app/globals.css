@@ -863,6 +863,10 @@ button:active:not(:disabled) {
   justify-content: space-between;
 }
 
+.launch-panel .launch-button:focus-visible {
+  outline-color: var(--accent);
+}
+
 .launch-note {
   padding: 12px 4px 2px;
   display: block;
@@ -1872,6 +1876,88 @@ button:active:not(:disabled) {
 
   .tip-sheet {
     border-radius: 24px;
+  }
+}
+
+/* Below the sidebar breakpoint the launch panel is the last thing on a page
+   that runs the length of a set, so Start session sat under every track and
+   the tips section. It becomes a bar pinned to the bottom instead: the card's
+   art and fine print are decoration this narrow, and what a DJ needs on the
+   way down is the room's name, its size, and the button. Same treatment the
+   guest side gives .player-dock. */
+@media (max-width: 899px) {
+  .setup-page {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  }
+
+  .launch-panel {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    padding: 10px 18px max(10px, env(safe-area-inset-bottom));
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    border-top: 1px solid var(--line-strong);
+    border-radius: 0;
+    transition: transform 160ms ease;
+  }
+
+  .launch-art,
+  .launch-note,
+  .launch-copy .status-line,
+  .launch-copy .tip-ready {
+    display: none;
+  }
+
+  .launch-copy {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+  }
+
+  .launch-copy h2 {
+    font-size: 15px;
+    letter-spacing: -0.03em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .launch-copy p {
+    margin-top: 2px;
+    font-size: 11px;
+  }
+
+  .launch-button {
+    width: auto;
+    min-width: 0;
+    max-width: 60%;
+    flex: 0 1 auto;
+    gap: 9px;
+    overflow: hidden;
+  }
+
+  .launch-button > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .launch-button > svg {
+    flex: none;
+  }
+
+  /* A fixed bar sits over the keyboard's inset on iOS, which would put it on
+     top of the field being typed into. It has nothing to offer mid-entry, so
+     it steps out of the way and comes back on blur. Browsers without :has()
+     keep the bar up, which is where this started. */
+  .setup-page:has(
+    .setup-main :is(input[type="text"], input[type="search"], input[type="tel"], textarea):focus
+  ) .launch-panel {
+    transform: translateY(100%);
   }
 }
 
