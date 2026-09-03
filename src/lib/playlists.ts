@@ -38,7 +38,10 @@ export const maximumPlaylistTracks = 500;
 const playlistColumns = `p.id, p.name, p.created_at,
   (SELECT COUNT(*) FROM playlist_tracks WHERE playlist_id = p.id) AS track_count`;
 
-export function listPlaylists(accountId: string): Playlist[] {
+export function listPlaylists(
+  accountId: string,
+  options: { unbounded?: boolean } = {},
+): Playlist[] {
   return (
     getDatabase()
       .prepare(
@@ -47,7 +50,7 @@ export function listPlaylists(accountId: string): Playlist[] {
          ORDER BY p.created_at DESC
          LIMIT ?`,
       )
-      .all(accountId, maximumPlaylistsPerAccount) as PlaylistRow[]
+      .all(accountId, options.unbounded ? -1 : maximumPlaylistsPerAccount) as PlaylistRow[]
   ).map(toPlaylist);
 }
 
@@ -69,6 +72,7 @@ export const playlistLimitMessage =
 export function createPlaylist(input: {
   accountId: string;
   name: string;
+  bypassLimit?: boolean;
 }): Playlist {
   const database = getDatabase();
   return database
@@ -78,7 +82,7 @@ export function createPlaylist(input: {
           .prepare("SELECT COUNT(*) AS count FROM playlists WHERE account_id = ?")
           .get(input.accountId) as { count: number }
       ).count;
-      if (owned >= maximumPlaylistsPerAccount) {
+      if (!input.bypassLimit && owned >= maximumPlaylistsPerAccount) {
         throw new Error(playlistLimitMessage);
       }
 
@@ -101,7 +105,11 @@ export function deletePlaylist(id: string, accountId: string) {
     .run(id, accountId).changes;
 }
 
-export function listPlaylistTracks(id: string, accountId: string): PlaylistTrack[] {
+export function listPlaylistTracks(
+  id: string,
+  accountId: string,
+  options: { unbounded?: boolean } = {},
+): PlaylistTrack[] {
   const rows = getDatabase()
     .prepare(
       `SELECT t.id, t.library_id, t.title, t.artist, t.preview_key,
@@ -114,7 +122,7 @@ export function listPlaylistTracks(id: string, accountId: string): PlaylistTrack
        ORDER BY pt.position ASC
        LIMIT ?`,
     )
-    .all(accountId, id, maximumPlaylistTracks) as Array<{
+    .all(accountId, id, options.unbounded ? -1 : maximumPlaylistTracks) as Array<{
     id: string;
     library_id: string;
     title: string;
@@ -153,6 +161,7 @@ export function addTrackToPlaylist(input: {
   playlistId: string;
   accountId: string;
   libraryTrackId: string;
+  bypassLimit?: boolean;
 }): AddTrackResult {
   const database = getDatabase();
   return database
@@ -182,7 +191,7 @@ export function addTrackToPlaylist(input: {
            FROM playlist_tracks WHERE playlist_id = ?`,
         )
         .get(input.playlistId) as { count: number; next: number };
-      if (count >= maximumPlaylistTracks) return "full" as const;
+      if (!input.bypassLimit && count >= maximumPlaylistTracks) return "full" as const;
 
       database
         .prepare(
@@ -197,6 +206,86 @@ export function addTrackToPlaylist(input: {
           new Date().toISOString(),
         );
       return "added" as const;
+    })
+    .immediate();
+}
+
+export type AddLibraryResult = {
+  status: "added" | "no_playlist" | "no_library" | "full";
+  added: number;
+};
+
+/** Append one library by reference, without copying its tracks or audio. */
+export function addLibraryToPlaylist(input: {
+  playlistId: string;
+  accountId: string;
+  libraryId: string;
+  bypassLimit?: boolean;
+}): AddLibraryResult {
+  const database = getDatabase();
+  return database
+    .transaction(() => {
+      const owned = database
+        .prepare("SELECT 1 FROM playlists WHERE id = ? AND account_id = ?")
+        .get(input.playlistId, input.accountId);
+      if (!owned) return { status: "no_playlist" as const, added: 0 };
+
+      const library = database
+        .prepare("SELECT 1 FROM libraries WHERE id = ?")
+        .get(input.libraryId);
+      if (!library) return { status: "no_library" as const, added: 0 };
+
+      const { count, next } = database
+        .prepare(
+          `SELECT COUNT(*) AS count, COALESCE(MAX(position), -1) + 1 AS next
+           FROM playlist_tracks WHERE playlist_id = ?`,
+        )
+        .get(input.playlistId) as { count: number; next: number };
+      const available = input.bypassLimit
+        ? -1
+        : Math.max(maximumPlaylistTracks - count, 0);
+      const tracks = database
+        .prepare(
+          `SELECT id FROM library_tracks t
+           WHERE library_id = ?
+             AND NOT EXISTS (
+               SELECT 1 FROM playlist_tracks pt
+               WHERE pt.playlist_id = ? AND pt.library_track_id = t.id
+             )
+           ORDER BY title COLLATE NOCASE ASC
+           LIMIT ?`,
+        )
+        .all(input.libraryId, input.playlistId, available) as Array<{ id: string }>;
+
+      const insert = database.prepare(
+        `INSERT INTO playlist_tracks
+          (playlist_id, library_track_id, position, added_at)
+         VALUES (?, ?, ?, ?)`,
+      );
+      const addedAt = new Date().toISOString();
+      tracks.forEach((track, index) => {
+        insert.run(input.playlistId, track.id, next + index, addedAt);
+      });
+
+      const hasMore =
+        !input.bypassLimit &&
+        Boolean(
+          database
+            .prepare(
+              `SELECT 1 FROM library_tracks t
+               WHERE library_id = ?
+                 AND NOT EXISTS (
+                   SELECT 1 FROM playlist_tracks pt
+                   WHERE pt.playlist_id = ? AND pt.library_track_id = t.id
+                 )
+               LIMIT 1`,
+            )
+            .get(input.libraryId, input.playlistId),
+        );
+      return {
+        status: hasMore ? ("full" as const) : ("added" as const),
+        added: tracks.length,
+      };
     })
     .immediate();
 }

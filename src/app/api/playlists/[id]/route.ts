@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAdminRequest } from "@/lib/admin";
 import { getAccountFromRequest } from "@/lib/auth";
 import { deletePlaylist, getPlaylist, listPlaylistTracks } from "@/lib/playlists";
 
@@ -21,7 +22,9 @@ export async function GET(
   }
   return NextResponse.json({
     playlist,
-    tracks: listPlaylistTracks(id, account.id),
+    tracks: listPlaylistTracks(id, account.id, {
+      unbounded: isAdminRequest(request),
+    }),
   });
 }
 

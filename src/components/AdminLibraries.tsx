@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ListMusic, Plus, Trash2, Upload, X } from "lucide-react";
+import type { AccountStatus } from "@/lib/accounts";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import { fetchWithTimeout, readJson } from "@/lib/http-client";
 
@@ -19,6 +20,14 @@ function readStorage(key: string) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Something went wrong.";
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 async function fileFingerprint(file: File) {
@@ -62,6 +71,13 @@ const defaultBusyWaitMs = 5_000;
 // batch would freeze the UI for an hour, so the file fails and says why.
 const busyWaitCapMs = 60_000;
 
+class UploadStillProcessingError extends Error {
+  constructor() {
+    super("The server is still processing this upload. Try this batch again in a few minutes.");
+    this.name = "UploadStillProcessingError";
+  }
+}
+
 /**
  * Statuses worth sending the file again. 5xx is the server having a bad
  * moment. 429 is deliberately absent: it means the server is busy rather
@@ -93,6 +109,7 @@ export default function AdminLibraries() {
   const [adminToken, setAdminToken] = useState("");
   const [tokenDraft, setTokenDraft] = useState("");
   const [accountToken, setAccountToken] = useState("");
+  const [accounts, setAccounts] = useState<AccountStatus[]>([]);
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [selectedId, setSelectedId] = useState("");
   const [tracks, setTracks] = useState<LibraryTrack[]>([]);
@@ -102,6 +119,12 @@ export default function AdminLibraries() {
   const [error, setError] = useState("");
   const [isBusy, setIsBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const adminTokenRef = useRef("");
+  const accountLoadGenerationRef = useRef(0);
+
+  useEffect(() => {
+    adminTokenRef.current = adminToken;
+  }, [adminToken]);
 
   useEffect(() => {
     setAdminToken(readStorage(adminTokenStorageKey));
@@ -111,9 +134,10 @@ export default function AdminLibraries() {
   const authHeaders = useCallback(
     (extra: Record<string, string> = {}) => ({
       "x-upnext-admin-token": adminToken,
+      ...(accountToken ? { Authorization: `Bearer ${accountToken}` } : {}),
       ...extra,
     }),
-    [adminToken],
+    [accountToken, adminToken],
   );
 
   const loadLibraries = useCallback(async () => {
@@ -137,6 +161,8 @@ export default function AdminLibraries() {
       setSelectedId((current) => current || data.libraries?.[0]?.id || "");
       setError("");
     } catch (loadError) {
+      setLibraries([]);
+      setSelectedId("");
       setError(errorMessage(loadError));
     }
   }, [adminToken, authHeaders]);
@@ -144,6 +170,44 @@ export default function AdminLibraries() {
   useEffect(() => {
     void loadLibraries();
   }, [loadLibraries]);
+
+  const loadAccounts = useCallback(async () => {
+    if (!adminToken || adminTokenRef.current !== adminToken) return;
+    const generation = ++accountLoadGenerationRef.current;
+    try {
+      const response = await fetchWithTimeout("/api/admin/accounts", {
+        cache: "no-store",
+        headers: authHeaders(),
+      });
+      const data = await readJson<{
+        accounts?: AccountStatus[];
+        error?: string;
+      }>(response);
+      if (!response.ok || !data.accounts) {
+        throw new Error(data.error || "Account status could not be loaded.");
+      }
+      if (
+        accountLoadGenerationRef.current !== generation ||
+        adminTokenRef.current !== adminToken
+      ) {
+        return;
+      }
+      setAccounts(data.accounts);
+    } catch (loadError) {
+      if (
+        accountLoadGenerationRef.current !== generation ||
+        adminTokenRef.current !== adminToken
+      ) {
+        return;
+      }
+      setAccounts([]);
+      setError(errorMessage(loadError));
+    }
+  }, [adminToken, authHeaders]);
+
+  useEffect(() => {
+    void loadAccounts();
+  }, [loadAccounts]);
 
   const loadTracks = useCallback(async () => {
     if (!adminToken || !selectedId) {
@@ -174,6 +238,12 @@ export default function AdminLibraries() {
 
   function saveToken(value: string) {
     const next = value.trim();
+    adminTokenRef.current = next;
+    accountLoadGenerationRef.current += 1;
+    setAccounts([]);
+    setLibraries([]);
+    setSelectedId("");
+    setTracks([]);
     setAdminToken(next);
     try {
       if (next) window.localStorage.setItem(adminTokenStorageKey, next);
@@ -231,7 +301,7 @@ export default function AdminLibraries() {
         throw new Error(data.error || "The library could not be deleted.");
       }
       if (selectedId === library.id) setSelectedId("");
-      await loadLibraries();
+      await Promise.all([loadLibraries(), loadAccounts()]);
       setStatus(`Deleted ${library.name}.`);
     } catch (deleteError) {
       setError(errorMessage(deleteError));
@@ -269,13 +339,21 @@ export default function AdminLibraries() {
           });
         } catch (fileError) {
           failures.push(`${file.name}: ${errorMessage(fileError)}`);
+          if (fileError instanceof UploadStillProcessingError) {
+            for (const waiting of list.slice(index + 1)) {
+              failures.push(
+                `${waiting.name}: not attempted because the previous upload is still processing.`,
+              );
+            }
+            break;
+          }
         }
       }
       // Refresh before reporting, not after: a successful loadLibraries
       // clears the error banner, which would wipe this batch's own list of
       // what failed. Silently dropping a file the operator watched fail is
       // worse than any of the failures.
-      await Promise.all([loadTracks(), loadLibraries()]);
+      await Promise.all([loadTracks(), loadLibraries(), loadAccounts()]);
       const added = list.length - failures.length;
       setStatus(`Added ${added} song${added === 1 ? "" : "s"}.`);
       if (failures.length > 0) {
@@ -295,20 +373,61 @@ export default function AdminLibraries() {
    * Send one file, standing back up from the failures that are worth another
    * go. Two of them, and they are not the same thing:
    *
-   *   - The transfer died. Nothing was learned about the file, so send it
-   *     again; three attempts in all.
-   *   - The server is busy. It is not this file's turn yet, so wait for the
-   *     interval the server named and ask again without spending an attempt.
+   *   - The transfer died or the proxy timed out. Ask for the idempotency ID's
+   *     status first, and resend only when the server says it has no such job.
+   *   - The server is busy finishing that upload. Poll without a file body
+   *     until its stored key is ready, without spending another attempt.
    *
    * That distinction is the whole point. A large upload that the tunnel drops
    * leaves the server still finishing it — the object PUT is deliberately not
-   * tied to the request — so the immediate re-send is met by the one-at-a-time
-   * gate. Counting those against three attempts spaced a second apart failed
-   * the file while the server was seconds from having it, and re-dropping was
-   * the operator's only recourse. Waiting instead costs nothing: the retry
-   * that lands after the gate clears is answered from the idempotency key
-   * before the server reads a byte of the body.
+   * tied to the request. Re-sending the whole body then meets the one-at-a-time
+   * gate and can strand every later file behind repeated waits. The status
+   * request is tiny, and once it returns the stored key uploadOne can catalogue
+   * the song without sending its audio again.
    */
+  async function recoverUpload(
+    uploadId: string,
+    onProgress: (note: string) => void,
+    initialWait = 0,
+  ) {
+    let waited = 0;
+    let wait = initialWait;
+
+    while (true) {
+      if (wait > 0) {
+        if (waited + wait > busyCeilingMs) {
+          throw new UploadStillProcessingError();
+        }
+        waited += wait;
+        onProgress("server finishing upload");
+        await pause(wait);
+      }
+
+      let response: Response;
+      let data: { previewKey?: string; status?: string; error?: string };
+      try {
+        response = await fetchWithTimeout(
+          `/api/uploads?requestId=${encodeURIComponent(uploadId)}`,
+          {
+            cache: "no-store",
+            headers: authHeaders(),
+          },
+        );
+        data = await readJson(response);
+      } catch {
+        // If even the lightweight check cannot get through, fall back to the
+        // bounded POST retry rather than losing that retry to the status call.
+        return null;
+      }
+      if (response.ok && data.previewKey) return data.previewKey;
+      if (response.status === 404) return null;
+      if (response.status !== 202) {
+        throw new Error(data.error || "The upload status could not be checked.");
+      }
+      wait = busyWaitMs(response) ?? defaultBusyWaitMs;
+    }
+  }
+
   async function sendUpload(
     file: File,
     uploadId: string,
@@ -326,10 +445,9 @@ export default function AdminLibraries() {
           "/api/uploads",
           {
             method: "POST",
-            headers: {
-              Authorization: `Bearer ${accountToken}`,
+            headers: authHeaders({
               "x-upnext-upload-id": uploadId,
-            },
+            }),
             body: form,
           },
           uploadTimeoutMs,
@@ -345,15 +463,25 @@ export default function AdminLibraries() {
           // A wait longer than the cap, or more waiting than one file is
           // worth, is not the gate clearing: stop and report what the server
           // said rather than holding the batch open indefinitely.
-          if (wait === null || busyWaited + wait > busyCeilingMs) break;
+          if (wait === null) break;
+          if (busyWaited + wait > busyCeilingMs) {
+            throw new UploadStillProcessingError();
+          }
           busyWaited += wait;
-          onProgress("server busy, waiting");
-          await pause(wait);
+          const recovered = await recoverUpload(uploadId, onProgress, wait);
+          if (recovered) return recovered;
           continue;
         }
         if (!isRetryableStatus(uploaded.status)) break;
+        const recovered = await recoverUpload(uploadId, onProgress);
+        if (recovered) return recovered;
       } catch (requestError) {
+        if (requestError instanceof UploadStillProcessingError) {
+          throw requestError;
+        }
         lastError = errorMessage(requestError);
+        const recovered = await recoverUpload(uploadId, onProgress);
+        if (recovered) return recovered;
       }
       if (attempt < uploadAttempts) await pause(attempt * 1000);
       attempt += 1;
@@ -374,25 +502,37 @@ export default function AdminLibraries() {
 
     const base = file.name.replace(/\.[^.]+$/, "");
     const [maybeArtist, ...rest] = base.split(" - ");
-    const added = await fetchWithTimeout(
-      `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
-      {
-        method: "POST",
-        headers: authHeaders({
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accountToken}`,
-        }),
-        body: JSON.stringify({
-          title: rest.length > 0 ? rest.join(" - ") : base,
-          artist: rest.length > 0 ? maybeArtist : "Unknown artist",
-          previewKey,
-        }),
-      },
-    );
-    if (!added.ok) {
+    const body = JSON.stringify({
+      title: rest.length > 0 ? rest.join(" - ") : base,
+      artist: rest.length > 0 ? maybeArtist : "Unknown artist",
+      previewKey,
+    });
+    let lastError = "could not be catalogued.";
+    for (let attempt = 1; attempt <= uploadAttempts; attempt += 1) {
+      onProgress(attempt > 1 ? `saving to library, retry ${attempt - 1}` : "saving to library");
+      let added: Response;
+      try {
+        added = await fetchWithTimeout(
+          `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
+          {
+            method: "POST",
+            headers: authHeaders({ "Content-Type": "application/json" }),
+            body,
+          },
+        );
+      } catch (requestError) {
+        lastError = errorMessage(requestError);
+        if (attempt < uploadAttempts) await pause(attempt * 1000);
+        continue;
+      }
+
       const data = await readJson<{ error?: string }>(added);
-      throw new Error(data.error || "could not be catalogued.");
+      if (added.ok) return;
+      lastError = data.error || lastError;
+      if (!isRetryableStatus(added.status)) throw new Error(lastError);
+      if (attempt < uploadAttempts) await pause(attempt * 1000);
     }
+    throw new Error(lastError);
   }
 
   async function removeTrack(track: LibraryTrack) {
@@ -407,7 +547,7 @@ export default function AdminLibraries() {
         const data = await readJson<{ error?: string }>(response);
         throw new Error(data.error || "The song could not be removed.");
       }
-      await Promise.all([loadTracks(), loadLibraries()]);
+      await Promise.all([loadTracks(), loadLibraries(), loadAccounts()]);
     } catch (deleteError) {
       setError(errorMessage(deleteError));
     } finally {
@@ -482,6 +622,54 @@ export default function AdminLibraries() {
       )}
 
       <main className="page-shell admin-page">
+        <section className="admin-panel">
+          <div className="admin-panel-body">
+            <div className="admin-panel-heading">
+              <h2>Accounts</h2>
+              <span>{accounts.length} total</span>
+            </div>
+            {accounts.length === 0 ? (
+              <p className="library-empty">No accounts yet.</p>
+            ) : (
+              <ul className="admin-account-list">
+                {accounts.map((account) => (
+                  <li key={account.id}>
+                    <div className="admin-account-main">
+                      <span className="track-copy">
+                        <strong>{account.pseudonym}</strong>
+                        <small>
+                          Phone ending {account.phoneLast4} · Joined{" "}
+                          {new Date(account.createdAt).toLocaleDateString()}
+                        </small>
+                      </span>
+                      <span
+                        className={`admin-account-state ${
+                          account.activeRoomCount > 0 ? "is-live" : ""
+                        }`}
+                      >
+                        {account.activeRoomCount > 0 ? "Live" : "Idle"}
+                      </span>
+                    </div>
+                    <div className="admin-account-metrics">
+                      <span><strong>{account.uploadCount}</strong> uploads</span>
+                      <span><strong>{formatBytes(account.storageBytes)}</strong> stored</span>
+                      <span><strong>{account.libraryTrackCount}</strong> library songs</span>
+                      <span><strong>{account.playlistCount}</strong> playlists</span>
+                    </div>
+                    {account.uploadsNotInLibrary > 0 && (
+                      <p className="admin-account-warning">
+                        {account.uploadsNotInLibrary} upload
+                        {account.uploadsNotInLibrary === 1 ? " is" : "s are"} not in a
+                        library.
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
+
         <section className="admin-panel">
           <div className="admin-panel-body">
             <h2>Libraries</h2>

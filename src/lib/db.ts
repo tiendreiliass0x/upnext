@@ -188,6 +188,8 @@ export function getDatabase() {
 
     CREATE INDEX IF NOT EXISTS sessions_host_idx
       ON sessions(host_account_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS audio_uploads_account_idx
+      ON audio_uploads(account_id);
     CREATE INDEX IF NOT EXISTS tracks_session_idx
       ON tracks(session_id, position);
     -- Plain, not partial: SQLite only consults a full index when enforcing the

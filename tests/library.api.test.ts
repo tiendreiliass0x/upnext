@@ -8,6 +8,7 @@ import {
 } from "@/app/api/libraries/[id]/tracks/route";
 import { DELETE as deleteTrack } from "@/app/api/library-tracks/[id]/route";
 import { adminTokenHeader } from "@/lib/admin";
+import { addLibraryTrack } from "@/lib/libraries";
 import { registerAudioUpload } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
@@ -194,6 +195,37 @@ describe("library API", () => {
     expect(
       (await body<{ tracks: Array<{ title: string }> }>(found)).tracks.map((t) => t.title),
     ).toEqual(["Moonfall"]);
+  });
+
+  it("lets the admin read the complete library", async () => {
+    const library = await makeLibrary();
+    const account = await dj("+32470002006");
+    for (let index = 0; index < 201; index += 1) {
+      addLibraryTrack({
+        libraryId: library.id,
+        title: `Song ${String(index).padStart(3, "0")}`,
+        artist: "A",
+        previewKey: null,
+        contributedBy: null,
+      });
+    }
+
+    const normal = await listTracks(
+      req(`http://localhost/api/libraries/${library.id}/tracks`, {
+        token: account.token,
+      }),
+      ctx(library.id),
+    );
+    const elevated = await listTracks(
+      req(`http://localhost/api/libraries/${library.id}/tracks`, {
+        token: account.token,
+        admin: ADMIN,
+      }),
+      ctx(library.id),
+    );
+
+    expect((await body<{ tracks: unknown[] }>(normal)).tracks).toHaveLength(200);
+    expect((await body<{ tracks: unknown[] }>(elevated)).tracks).toHaveLength(201);
   });
 
   it("keeps removal with the admin, since anyone may contribute", async () => {

@@ -19,6 +19,7 @@ import type { CatalogueTrack, Library, LibraryTrack } from "@/lib/libraries";
 import type { Playlist, PlaylistTrack } from "@/lib/playlists";
 
 const accountTokenStorageKey = "upnext-account-token";
+const adminTokenStorageKey = "upnext-admin-token";
 
 type Row = CatalogueTrack | PlaylistTrack;
 type View =
@@ -38,6 +39,7 @@ function formatTime(seconds: number) {
 
 export default function PlayConsole() {
   const [token, setToken] = useState<string | null>(null);
+  const [adminToken, setAdminToken] = useState("");
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [libraries, setLibraries] = useState<Library[]>([]);
   const libraryNameRef = useRef(new Map<string, string>());
@@ -47,6 +49,7 @@ export default function PlayConsole() {
   const [query, setQuery] = useState("");
   const [newName, setNewName] = useState("");
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [isBusy, setIsBusy] = useState(false);
 
   // Player
@@ -64,14 +67,19 @@ export default function PlayConsole() {
   useEffect(() => {
     try {
       setToken(window.localStorage.getItem(accountTokenStorageKey) ?? "");
+      setAdminToken(window.localStorage.getItem(adminTokenStorageKey) ?? "");
     } catch {
       setToken("");
+      setAdminToken("");
     }
   }, []);
 
   const authHeaders = useCallback(
-    () => ({ Authorization: `Bearer ${token ?? ""}` }),
-    [token],
+    () => ({
+      Authorization: `Bearer ${token ?? ""}`,
+      ...(adminToken ? { "x-upnext-admin-token": adminToken } : {}),
+    }),
+    [adminToken, token],
   );
 
   const loadPlaylists = useCallback(async () => {
@@ -104,7 +112,7 @@ export default function PlayConsole() {
       try {
         const response = await fetch("/api/libraries", {
           cache: "no-store",
-          headers: { Authorization: `Bearer ${token}` },
+          headers: authHeaders(),
         });
         const data = await readJson<{ libraries?: Library[] }>(response);
         if (!cancelled && data.libraries) setLibraries(data.libraries);
@@ -115,7 +123,7 @@ export default function PlayConsole() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [authHeaders, token]);
 
   // Rows follow the view: catalogue search, or one playlist's contents.
   useEffect(() => {
@@ -258,6 +266,7 @@ export default function PlayConsole() {
 
   async function createPlaylist(event: React.FormEvent) {
     event.preventDefault();
+    setNotice("");
     setIsBusy(true);
     try {
       const response = await fetch("/api/playlists", {
@@ -271,7 +280,7 @@ export default function PlayConsole() {
       }
       setNewName("");
       await loadPlaylists();
-      setView({ kind: "playlist", id: data.playlist.id });
+      changeView({ kind: "playlist", id: data.playlist.id });
     } catch (createError) {
       setError(errorMessage(createError));
     } finally {
@@ -280,6 +289,7 @@ export default function PlayConsole() {
   }
 
   async function addToPlaylist(playlistId: string, trackId: string) {
+    setNotice("");
     setIsBusy(true);
     try {
       const response = await fetch(
@@ -302,7 +312,47 @@ export default function PlayConsole() {
     }
   }
 
+  async function addLibraryToPlaylist(playlistId: string, libraryId: string) {
+    setNotice("");
+    setIsBusy(true);
+    try {
+      const response = await fetch(
+        `/api/playlists/${encodeURIComponent(playlistId)}/tracks`,
+        {
+          method: "POST",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify({ libraryId }),
+        },
+      );
+      const data = await readJson<{ added?: number; full?: boolean; error?: string }>(
+        response,
+      );
+      if (!response.ok) {
+        throw new Error(data.error || "The library could not be added.");
+      }
+      if (data.full) {
+        setNotice(
+          `Added ${data.added ?? 0} songs, then reached this playlist's limit.`,
+        );
+      } else {
+        const added = data.added ?? 0;
+        setNotice(
+          added > 0
+            ? `Added ${added} song${added === 1 ? "" : "s"} from the library.`
+            : "That playlist already contains the whole library.",
+        );
+      }
+      await loadPlaylists();
+      setView({ kind: "playlist", id: playlistId });
+    } catch (addError) {
+      setError(errorMessage(addError));
+    } finally {
+      setIsBusy(false);
+    }
+  }
+
   async function removeFromPlaylist(playlistId: string, trackId: string) {
+    setNotice("");
     setIsBusy(true);
     try {
       const response = await fetch(
@@ -324,6 +374,7 @@ export default function PlayConsole() {
 
   async function removePlaylist(playlist: Playlist) {
     if (!window.confirm(`Delete the playlist "${playlist.name}"?`)) return;
+    setNotice("");
     setIsBusy(true);
     try {
       const response = await fetch(
@@ -332,7 +383,7 @@ export default function PlayConsole() {
       );
       if (!response.ok) throw new Error("The playlist could not be deleted.");
       if (view.kind === "playlist" && view.id === playlist.id) {
-        setView({ kind: "search" });
+        changeView({ kind: "search" });
       }
       await loadPlaylists();
     } catch (deleteError) {
@@ -381,6 +432,11 @@ export default function PlayConsole() {
   // playlist is a fixed list the DJ built and is shown whole.
   const isSearchable = view.kind === "search" || view.kind === "library";
 
+  function changeView(next: View) {
+    setNotice("");
+    setView(next);
+  }
+
   return (
     <div className={`upnext-app ${current ? "has-dock" : ""}`}>
       <header className="app-header">
@@ -407,7 +463,7 @@ export default function PlayConsole() {
           <h2>Catalogue</h2>
           <ul className="play-playlists">
             <li className={view.kind === "search" ? "is-active" : ""}>
-              <button type="button" onClick={() => setView({ kind: "search" })}>
+              <button type="button" onClick={() => changeView({ kind: "search" })}>
                 <ListMusic size={15} />
                 <span className="track-copy">
                   <strong>Everything</strong>
@@ -424,7 +480,7 @@ export default function PlayConsole() {
               >
                 <button
                   type="button"
-                  onClick={() => setView({ kind: "library", id: library.id })}
+                  onClick={() => changeView({ kind: "library", id: library.id })}
                 >
                   <LibraryIcon size={15} />
                   <span className="track-copy">
@@ -464,7 +520,7 @@ export default function PlayConsole() {
               >
                 <button
                   type="button"
-                  onClick={() => setView({ kind: "playlist", id: playlist.id })}
+                  onClick={() => changeView({ kind: "playlist", id: playlist.id })}
                 >
                   <ListMusic size={15} />
                   <span className="track-copy">
@@ -501,6 +557,27 @@ export default function PlayConsole() {
                 Start a room from this playlist
               </Link>
             )}
+            {activeLibrary && playlists.length > 0 && activeLibrary.trackCount > 0 && (
+              <select
+                className="play-add"
+                aria-label={`Add all songs from ${activeLibrary.name} to a playlist`}
+                value=""
+                disabled={isBusy}
+                onChange={(event) => {
+                  if (event.target.value) {
+                    void addLibraryToPlaylist(event.target.value, activeLibrary.id);
+                    event.target.value = "";
+                  }
+                }}
+              >
+                <option value="">Add library to…</option>
+                {playlists.map((playlist) => (
+                  <option key={playlist.id} value={playlist.id}>
+                    {playlist.name}
+                  </option>
+                ))}
+              </select>
+            )}
             {isSearchable && (
               <input
                 type="search"
@@ -516,6 +593,8 @@ export default function PlayConsole() {
               />
             )}
           </div>
+
+          {notice && <p className="play-notice" role="status">{notice}</p>}
 
           {rows.length === 0 ? (
             <p className="library-empty">

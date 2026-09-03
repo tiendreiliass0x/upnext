@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
+import { isAdminRequest } from "@/lib/admin";
 import { getAccountFromRequest } from "@/lib/auth";
-import { addTrackToPlaylist } from "@/lib/playlists";
+import { addLibraryToPlaylist, addTrackToPlaylist } from "@/lib/playlists";
 
 export const dynamic = "force-dynamic";
 
@@ -15,15 +16,44 @@ export async function POST(
 
   try {
     const { id } = await context.params;
-    const body = (await request.json()) as { trackId?: unknown };
-    if (typeof body.trackId !== "string" || !body.trackId) {
+    const body = (await request.json()) as {
+      trackId?: unknown;
+      libraryId?: unknown;
+    };
+    const trackId = typeof body.trackId === "string" ? body.trackId : "";
+    const libraryId = typeof body.libraryId === "string" ? body.libraryId : "";
+    if (!trackId && !libraryId) {
       return NextResponse.json({ error: "A track is required." }, { status: 400 });
+    }
+    const bypassLimit = isAdminRequest(request);
+
+    if (libraryId) {
+      const result = addLibraryToPlaylist({
+        playlistId: id,
+        accountId: account.id,
+        libraryId,
+        bypassLimit,
+      });
+      if (result.status === "no_playlist") {
+        return NextResponse.json({ error: "No such playlist." }, { status: 404 });
+      }
+      if (result.status === "no_library") {
+        return NextResponse.json({ error: "No such library." }, { status: 404 });
+      }
+      if (result.status === "full" && result.added === 0) {
+        return NextResponse.json({ error: "This playlist is full." }, { status: 409 });
+      }
+      return NextResponse.json(
+        { added: result.added, full: result.status === "full" },
+        { status: result.added > 0 ? 201 : 200 },
+      );
     }
 
     const result = addTrackToPlaylist({
       playlistId: id,
       accountId: account.id,
-      libraryTrackId: body.trackId,
+      libraryTrackId: trackId,
+      bypassLimit,
     });
 
     if (result === "no_playlist") {

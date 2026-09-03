@@ -16,6 +16,34 @@ export type StoredAccount = PublicAccount & {
   avatarKey: string | null;
 };
 
+export type AccountStatus = {
+  id: string;
+  pseudonym: string;
+  phoneLast4: string;
+  createdAt: string;
+  updatedAt: string;
+  uploadCount: number;
+  storageBytes: number;
+  libraryTrackCount: number;
+  uploadsNotInLibrary: number;
+  playlistCount: number;
+  activeRoomCount: number;
+};
+
+type AccountStatusRow = {
+  id: string;
+  phone: string;
+  pseudonym: string;
+  created_at: string;
+  updated_at: string;
+  upload_count: number;
+  storage_bytes: number;
+  library_track_count: number;
+  uploads_not_in_library: number;
+  playlist_count: number;
+  active_room_count: number;
+};
+
 type AccountRow = {
   id: string;
   phone: string;
@@ -33,6 +61,47 @@ export function normalizePhone(phone: string) {
   if (phone.trim().startsWith("00")) digits = digits.slice(2);
   if (digits.length < 8 || digits.length > 15) return null;
   return `+${digits}`;
+}
+
+export function listAccountStatuses(): AccountStatus[] {
+  const now = new Date().toISOString();
+  const rows = getDatabase()
+    .prepare(
+      `SELECT a.id, a.phone, a.pseudonym, a.created_at, a.updated_at,
+              (SELECT COUNT(*) FROM audio_uploads u
+               WHERE u.account_id = a.id) AS upload_count,
+              COALESCE((SELECT SUM(u.size_bytes) FROM audio_uploads u
+                        WHERE u.account_id = a.id), 0) AS storage_bytes,
+              (SELECT COUNT(*) FROM library_tracks t
+               WHERE t.contributed_by = a.id) AS library_track_count,
+              (SELECT COUNT(*) FROM audio_uploads u
+               WHERE u.account_id = a.id
+                 AND NOT EXISTS (
+                   SELECT 1 FROM library_tracks t WHERE t.preview_key = u.object_key
+                 )) AS uploads_not_in_library,
+              (SELECT COUNT(*) FROM playlists p
+               WHERE p.account_id = a.id) AS playlist_count,
+              (SELECT COUNT(*) FROM sessions s
+               WHERE s.host_account_id = a.id AND s.ended_at IS NULL
+                 AND (s.keep_open = 1 OR s.expires_at > ?)) AS active_room_count
+       FROM accounts a
+       ORDER BY a.created_at DESC`,
+    )
+    .all(now) as AccountStatusRow[];
+
+  return rows.map((row) => ({
+    id: row.id,
+    pseudonym: row.pseudonym,
+    phoneLast4: row.phone.slice(-4),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    uploadCount: row.upload_count,
+    storageBytes: row.storage_bytes,
+    libraryTrackCount: row.library_track_count,
+    uploadsNotInLibrary: row.uploads_not_in_library,
+    playlistCount: row.playlist_count,
+    activeRoomCount: row.active_room_count,
+  }));
 }
 
 function toStoredAccount(row: AccountRow): StoredAccount {

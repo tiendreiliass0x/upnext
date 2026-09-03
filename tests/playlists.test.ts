@@ -3,6 +3,7 @@ import { createAccount } from "@/lib/accounts";
 import { getDatabase } from "@/lib/db";
 import { addLibraryTrack, createLibrary, deleteLibraryTrack } from "@/lib/libraries";
 import {
+  addLibraryToPlaylist,
   addTrackToPlaylist,
   createPlaylist,
   deletePlaylist,
@@ -108,6 +109,35 @@ describe("playlists", () => {
     expect(listPlaylistTracks(playlist.id, owner.id)).toHaveLength(1);
   });
 
+  it("adds a whole library as references and ignores a repeat", () => {
+    const owner = dj("+32470003012");
+    const library = createLibrary({ name: "L", description: "" });
+    const playlist = createPlaylist({ accountId: owner.id, name: "Set" });
+    for (const title of ["Third", "First", "Second"]) {
+      catalogueTrack(library.id, title);
+    }
+
+    expect(
+      addLibraryToPlaylist({
+        playlistId: playlist.id,
+        accountId: owner.id,
+        libraryId: library.id,
+      }),
+    ).toEqual({ status: "added", added: 3 });
+    expect(listPlaylistTracks(playlist.id, owner.id).map((track) => track.title)).toEqual([
+      "First",
+      "Second",
+      "Third",
+    ]);
+    expect(
+      addLibraryToPlaylist({
+        playlistId: playlist.id,
+        accountId: owner.id,
+        libraryId: library.id,
+      }),
+    ).toEqual({ status: "added", added: 0 });
+  });
+
   it("refuses a song that is not in the catalogue", () => {
     const owner = dj("+32470003007");
     const playlist = createPlaylist({ accountId: owner.id, name: "Set" });
@@ -162,6 +192,15 @@ describe("playlist bounds", () => {
       playlistLimitMessage,
     );
     expect(listPlaylists(owner.id)).toHaveLength(maximumPlaylistsPerAccount);
+    const elevated = createPlaylist({
+      accountId: owner.id,
+      name: "Super-admin set",
+      bypassLimit: true,
+    });
+    expect(listPlaylists(owner.id, { unbounded: true })).toHaveLength(
+      maximumPlaylistsPerAccount + 1,
+    );
+    deletePlaylist(elevated.id, owner.id);
     // Deleting one frees a slot.
     deletePlaylist(listPlaylists(owner.id)[0].id, owner.id);
     expect(createPlaylist({ accountId: owner.id, name: "One more" }).name).toBe("One more");
@@ -180,13 +219,25 @@ describe("playlist bounds", () => {
         }),
       ).toBe("added");
     }
+    const overflow = catalogueTrack(library.id, "Overflow");
     expect(
       addTrackToPlaylist({
         playlistId: playlist.id,
         accountId: owner.id,
-        libraryTrackId: catalogueTrack(library.id, "Overflow").id,
+        libraryTrackId: overflow.id,
       }),
     ).toBe("full");
+    expect(
+      addTrackToPlaylist({
+        playlistId: playlist.id,
+        accountId: owner.id,
+        libraryTrackId: overflow.id,
+        bypassLimit: true,
+      }),
+    ).toBe("added");
     expect(listPlaylistTracks(playlist.id, owner.id)).toHaveLength(maximumPlaylistTracks);
+    expect(listPlaylistTracks(playlist.id, owner.id, { unbounded: true })).toHaveLength(
+      maximumPlaylistTracks + 1,
+    );
   });
 });
