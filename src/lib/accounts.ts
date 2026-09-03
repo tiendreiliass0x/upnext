@@ -1,14 +1,19 @@
 import { getDatabase } from "@/lib/db";
+import { avatarUrlFor } from "@/lib/profile";
 
 export type PublicAccount = {
   id: string;
   pseudonym: string;
   phoneLast4: string;
+  /** Where to fetch the profile picture, or null for the initial bubble. */
+  avatarUrl: string | null;
+  tagline: string;
 };
 
 export type StoredAccount = PublicAccount & {
   phone: string;
   authToken: string;
+  avatarKey: string | null;
 };
 
 type AccountRow = {
@@ -16,7 +21,12 @@ type AccountRow = {
   phone: string;
   pseudonym: string;
   auth_token: string;
+  avatar_key: string | null;
+  tagline: string;
 };
+
+const accountColumnsSql =
+  "id, phone, pseudonym, auth_token, avatar_key, tagline";
 
 export function normalizePhone(phone: string) {
   let digits = phone.replace(/\D/g, "");
@@ -32,12 +42,15 @@ function toStoredAccount(row: AccountRow): StoredAccount {
     phoneLast4: row.phone.slice(-4),
     pseudonym: row.pseudonym,
     authToken: row.auth_token,
+    avatarKey: row.avatar_key,
+    avatarUrl: avatarUrlFor(row.avatar_key),
+    tagline: row.tagline,
   };
 }
 
 export function getAccountByPhone(phone: string) {
   const row = getDatabase()
-    .prepare("SELECT id, phone, pseudonym, auth_token FROM accounts WHERE phone = ?")
+    .prepare(`SELECT ${accountColumnsSql} FROM accounts WHERE phone = ?`)
     .get(phone) as AccountRow | undefined;
   return row ? toStoredAccount(row) : null;
 }
@@ -49,7 +62,7 @@ export function getAccountByCreationRequest(input: {
   const createdAfter = new Date(Date.now() - 10 * 60 * 1000).toISOString();
   const row = getDatabase()
     .prepare(
-      `SELECT a.id, a.phone, a.pseudonym, a.auth_token
+      `SELECT a.id, a.phone, a.pseudonym, a.auth_token, a.avatar_key, a.tagline
        FROM account_creation_requests r
        JOIN accounts a ON a.id = r.account_id
        WHERE r.request_id = ? AND r.voter_id = ? AND r.created_at >= ?`,
@@ -146,6 +159,9 @@ export function createAccount(input: {
     phoneLast4: input.phone.slice(-4),
     pseudonym: input.pseudonym,
     authToken: crypto.randomUUID(),
+    avatarKey: null,
+    avatarUrl: null,
+    tagline: "",
   };
 
   database
@@ -193,35 +209,98 @@ export function createAccount(input: {
   return account;
 }
 
-export function updateAccountPseudonym(account: StoredAccount, pseudonym: string) {
+/**
+ * Nudge every live room this account is visible in.
+ *
+ * A profile labels every room this account hosts and rides along on the face
+ * stacks of rooms they voted in. Guests poll with a revision-keyed ETag, so
+ * without a bump they keep hearing 304 and showing yesterday's name and
+ * picture until something else in the room happens to change.
+ */
+function touchAccountRooms(
+  database: ReturnType<typeof getDatabase>,
+  accountId: string,
+  now: string,
+) {
+  database
+    .prepare(
+      `UPDATE sessions SET revision = revision + 1
+       WHERE ended_at IS NULL AND expires_at > ?
+          AND (
+            host_account_id = ?
+            OR id IN (SELECT session_id FROM votes WHERE account_id = ?)
+          )`,
+    )
+    .run(now, accountId, accountId);
+}
+
+/**
+ * Save the parts of a profile that are text. Each field is optional and only
+ * what is passed is written, so the picture form and the name form can each
+ * send what they touched without reading the rest back first.
+ */
+export function updateAccountProfile(
+  account: StoredAccount,
+  changes: { pseudonym?: string; tagline?: string },
+): StoredAccount {
+  const pseudonym =
+    changes.pseudonym === undefined
+      ? account.pseudonym
+      : changes.pseudonym.trim();
+  const tagline =
+    changes.tagline === undefined ? account.tagline : changes.tagline.trim();
   const database = getDatabase();
   database.transaction(() => {
     const now = new Date().toISOString();
     database
-      .prepare("UPDATE accounts SET pseudonym = ?, updated_at = ? WHERE id = ?")
-      .run(pseudonym, now, account.id);
-    // The name labels every room this account hosts and appears on the face
-    // stacks of rooms they voted in. Guests poll with a revision-keyed ETag:
-    // without a bump they would keep hearing 304 and showing the old name.
-    database
       .prepare(
-        `UPDATE sessions SET revision = revision + 1
-         WHERE ended_at IS NULL AND expires_at > ?
-            AND (
-              host_account_id = ?
-              OR id IN (SELECT session_id FROM votes WHERE account_id = ?)
-            )`,
+        "UPDATE accounts SET pseudonym = ?, tagline = ?, updated_at = ? WHERE id = ?",
       )
-      .run(now, account.id, account.id);
+      .run(pseudonym, tagline, now, account.id);
+    touchAccountRooms(database, account.id, now);
   })();
-  return { ...account, pseudonym };
+  return { ...account, pseudonym, tagline };
+}
+
+/**
+ * Point the account at a new picture, or at none, and hand back the key it
+ * was holding so the caller can delete that object. The swap is a single
+ * write, and the old object is removed after it: an object outliving its row
+ * for a moment is a wasted byte, whereas a row outliving its object would be
+ * a broken picture on every face in the room.
+ */
+export function setAccountAvatar(
+  account: StoredAccount,
+  avatarKey: string | null,
+): { account: StoredAccount; replacedKey: string | null } {
+  // Nothing to do, and worth saying so: the write would bump the revision of
+  // every live room this account is in, costing every guest in them a full
+  // payload on their next poll in place of a 304.
+  if (account.avatarKey === avatarKey) {
+    return { account, replacedKey: null };
+  }
+  const database = getDatabase();
+  database.transaction(() => {
+    const now = new Date().toISOString();
+    database
+      .prepare("UPDATE accounts SET avatar_key = ?, updated_at = ? WHERE id = ?")
+      .run(avatarKey, now, account.id);
+    touchAccountRooms(database, account.id, now);
+  })();
+  return {
+    account: { ...account, avatarKey, avatarUrl: avatarUrlFor(avatarKey) },
+    replacedKey:
+      account.avatarKey && account.avatarKey !== avatarKey
+        ? account.avatarKey
+        : null,
+  };
 }
 
 export function getAccountByToken(token: string) {
   if (!token || token.length > 100) return null;
   const row = getDatabase()
     .prepare(
-      "SELECT id, phone, pseudonym, auth_token FROM accounts WHERE auth_token = ?",
+      `SELECT ${accountColumnsSql} FROM accounts WHERE auth_token = ?`,
     )
     .get(token) as AccountRow | undefined;
   return row ? toStoredAccount(row) : null;
@@ -232,5 +311,7 @@ export function toPublicAccount(account: StoredAccount): PublicAccount {
     id: account.id,
     pseudonym: account.pseudonym,
     phoneLast4: account.phoneLast4,
+    avatarUrl: account.avatarUrl,
+    tagline: account.tagline,
   };
 }
