@@ -8,6 +8,7 @@ import {
   updateAccountProfile,
 } from "@/lib/accounts";
 import { getAccountFromRequest } from "@/lib/auth";
+import { getDatabase } from "@/lib/db";
 import { createSession, getSession, toggleVote } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
@@ -128,6 +129,31 @@ describe("renaming while in a room", () => {
       requestId: crypto.randomUUID(),
       tracks: [{ title: "T", artist: "A" }],
     });
+    const before = getSession(created.session.id)!;
+
+    updateAccountProfile(host, { pseudonym: "New DJ" });
+
+    const after = getSession(created.session.id)!;
+    expect(after.djName).toBe("New DJ");
+    expect(after.revision).toBe(before.revision + 1);
+  });
+
+  it("refreshes the name in a room held open past its own expiry", () => {
+    const host = createAccount({ phone: "+32470005004", pseudonym: "Old DJ" });
+    const created = createSession({
+      name: "Set",
+      venue: "",
+      accountId: host.id,
+      requestId: crypto.randomUUID(),
+      keepOpen: true,
+      tracks: [{ title: "T", artist: "A" }],
+    });
+    // A room the DJ holds open outlives its expires_at, which is exactly the
+    // state a bump keyed on "expires_at is still ahead" would step over: its
+    // guests would keep hearing 304 and showing the old name for good.
+    getDatabase()
+      .prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+      .run(new Date(Date.now() - 60 * 60 * 1000).toISOString(), created.session.id);
     const before = getSession(created.session.id)!;
 
     updateAccountProfile(host, { pseudonym: "New DJ" });

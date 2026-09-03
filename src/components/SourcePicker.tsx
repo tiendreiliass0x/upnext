@@ -65,9 +65,13 @@ export default function SourcePicker({
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
+  const [isAddingPlaylist, setIsAddingPlaylist] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [pickerError, setPickerError] = useState("");
   const pollRef = useRef<number | null>(null);
+  // The add handlers below outlive their own component when the DJ starts the
+  // session mid-request, so they ask before reporting back.
+  const mountedRef = useRef(true);
 
   const authHeaders = useCallback(
     () => ({ Authorization: `Bearer ${accountToken}` }),
@@ -142,6 +146,10 @@ export default function SourcePicker({
     };
   }, [accountToken, connected]);
 
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
   // Tracks follow the chosen playlist, debounced exactly like the library
   // search beside it so typing does not fire a request per keystroke.
   useEffect(() => {
@@ -153,6 +161,7 @@ export default function SourcePicker({
     const timer = window.setTimeout(() => {
       void (async () => {
         setIsLoading(true);
+        setPickerError("");
         try {
           const response = await fetchWithTimeout(
             `/api/connections/${connected.provider}/playlists/${encodeURIComponent(playlistId)}/tracks?q=${encodeURIComponent(query)}`,
@@ -164,10 +173,7 @@ export default function SourcePicker({
           if (!response.ok || !data.tracks) {
             throw new Error(data.error || "Those songs could not be read.");
           }
-          if (!cancelled) {
-            setTracks(data.tracks);
-            setPickerError("");
-          }
+          if (!cancelled) setTracks(data.tracks);
         } catch (error) {
           if (!cancelled) setPickerError(getErrorMessage(error));
         } finally {
@@ -273,6 +279,44 @@ export default function SourcePicker({
       setPicked(new Set());
     } catch (error) {
       setPickerError(getErrorMessage(error));
+    }
+  }
+
+  async function addEntirePlaylist() {
+    if (!connected || !playlistId || isAddingPlaylist) return;
+    // With no search term the debounced load above already holds every row a
+    // reload would return, so the common path costs the provider nothing.
+    if (!query.trim() && tracks.length > 0) {
+      onAdd(tracks, connected.provider);
+      setPicked(new Set());
+      return;
+    }
+    setIsAddingPlaylist(true);
+    setPickerError("");
+    try {
+      // Reload without the current search so "entire" always means the chosen
+      // playlist, not only the rows left visible by a search.
+      const response = await fetchWithTimeout(
+        `/api/connections/${connected.provider}/playlists/${encodeURIComponent(playlistId)}/tracks?q=`,
+        { cache: "no-store", headers: authHeaders() },
+      );
+      const data = await readJson<{ tracks?: ProviderTrack[]; error?: string }>(
+        response,
+      );
+      if (!response.ok || !data.tracks) {
+        throw new Error(data.error || "Those songs could not be read.");
+      }
+      if (!mountedRef.current) return;
+      if (data.tracks.length === 0) {
+        setPickerError("This playlist has no playable songs.");
+        return;
+      }
+      onAdd(data.tracks, connected.provider);
+      setPicked(new Set());
+    } catch (error) {
+      if (mountedRef.current) setPickerError(getErrorMessage(error));
+    } finally {
+      if (mountedRef.current) setIsAddingPlaylist(false);
     }
   }
 
@@ -390,20 +434,31 @@ export default function SourcePicker({
       )}
 
       <div className="source-actions">
-        <button
-          type="button"
-          className="secondary-button"
-          disabled={disabled || selected.length === 0}
-          onClick={() => {
-            onAdd(selected, connected.provider);
-            setPicked(new Set());
-          }}
-        >
-          <Plus size={16} />
-          {selected.length === 0
-            ? "Select songs to add"
-            : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
-        </button>
+        <div className="picker-add-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={disabled || selected.length === 0}
+            onClick={() => {
+              onAdd(selected, connected.provider);
+              setPicked(new Set());
+            }}
+          >
+            <Plus size={16} />
+            {selected.length === 0
+              ? "Select songs to add"
+              : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={disabled || !playlistId || isAddingPlaylist}
+            onClick={() => void addEntirePlaylist()}
+          >
+            <Plus size={16} />
+            {isAddingPlaylist ? "Adding playlist..." : "Add entire playlist"}
+          </button>
+        </div>
         <button
           type="button"
           className="text-button"

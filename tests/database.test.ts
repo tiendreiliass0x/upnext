@@ -11,6 +11,7 @@ describe("database migrations", () => {
     cached.exec(`
       ALTER TABLE sessions DROP COLUMN cash_app_handle;
       ALTER TABLE sessions DROP COLUMN venmo_handle;
+      ALTER TABLE sessions DROP COLUMN keep_open;
     `);
 
     // Next dev preserves the connection on globalThis while replacing this
@@ -25,6 +26,7 @@ describe("database migrations", () => {
 
     expect(columns.map(({ name }) => name)).toContain("cash_app_handle");
     expect(columns.map(({ name }) => name)).toContain("venmo_handle");
+    expect(columns.map(({ name }) => name)).toContain("keep_open");
   });
 
   it("adds anonymous voter storage without losing legacy account data", () => {
@@ -119,13 +121,14 @@ describe("database migrations", () => {
     expect(sessionColumns.map(({ name }) => name)).toContain("request_id");
     expect(sessionColumns.map(({ name }) => name)).toContain("cash_app_handle");
     expect(sessionColumns.map(({ name }) => name)).toContain("venmo_handle");
+    expect(sessionColumns.map(({ name }) => name)).toContain("keep_open");
     expect(
       migrated
         .prepare(
-          "SELECT cash_app_handle, venmo_handle FROM sessions WHERE id = 'ROOMA'",
+          "SELECT cash_app_handle, venmo_handle, keep_open FROM sessions WHERE id = 'ROOMA'",
         )
         .get(),
-    ).toEqual({ cash_app_handle: null, venmo_handle: null });
+    ).toEqual({ cash_app_handle: null, venmo_handle: null, keep_open: 0 });
     expect(uploadColumns.map(({ name }) => name)).toContain("request_id");
     expect(
       migrated.prepare("SELECT COUNT(*) AS count FROM votes").get(),

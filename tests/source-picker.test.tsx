@@ -206,6 +206,21 @@ describe("SourcePicker", () => {
     );
   });
 
+  it("adds the entire playlist without requiring individual picks", async () => {
+    const onAdd = vi.fn();
+    connected();
+    render(<SourcePicker accountToken="t" onAdd={onAdd} />);
+
+    await screen.findByText("Night Bus");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add entire playlist" }),
+    );
+
+    await waitFor(() =>
+      expect(onAdd).toHaveBeenCalledWith(tracks, "soundcloud"),
+    );
+  });
+
   it("will not add before anything is picked", async () => {
     connected();
     render(<SourcePicker accountToken="t" onAdd={() => {}} />);

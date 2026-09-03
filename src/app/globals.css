@@ -417,6 +417,91 @@ button:active:not(:disabled) {
   line-height: 1.5;
 }
 
+.setup-finalize {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.setup-finalize .section-heading {
+  margin-bottom: 18px;
+}
+
+.session-lifetime-toggle {
+  margin-top: 18px;
+  padding-top: 18px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.session-lifetime-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.toggle-track {
+  width: 42px;
+  height: 24px;
+  padding: 3px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.toggle-track > span {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 160ms ease, background-color 160ms ease;
+}
+
+.session-lifetime-toggle input:checked + .toggle-track {
+  border-color: var(--ink);
+  background: var(--accent);
+}
+
+.session-lifetime-toggle input:checked + .toggle-track > span {
+  background: var(--accent-ink);
+  transform: translateX(18px);
+}
+
+.session-lifetime-toggle input:focus-visible + .toggle-track {
+  outline: 2px solid color-mix(in srgb, var(--accent) 85%, var(--ink));
+  outline-offset: 2px;
+}
+
+.session-lifetime-toggle:has(input:disabled) {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.toggle-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.toggle-copy strong {
+  font-size: 13px;
+}
+
+.toggle-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .tip-ready {
   width: fit-content;
   margin-top: 10px;
@@ -1227,7 +1312,12 @@ button:active:not(:disabled) {
   gap: 5px;
   border: 1px solid color-mix(in srgb, var(--accent-pressed) 70%, var(--line));
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  /* Filled, not tinted: this chip sits on the ballot's --surface and on the
+     now-playing card's inverted --surface-strong, and both swap ends between
+     the light and dark schemes. Against whichever of the two is dark, a tint
+     composites to a mid-grey and leaves the 9px label near 3.3:1, so the chip
+     carries its own ground instead. */
+  background: var(--accent);
   color: var(--accent-ink);
   font-family: var(--font-geist-mono), monospace;
   font-size: 9px;
@@ -1237,7 +1327,7 @@ button:active:not(:disabled) {
 }
 
 .tip-pick-button:hover {
-  background: var(--accent);
+  background: var(--accent-pressed);
 }
 
 .tip-sheet-backdrop {
@@ -1700,6 +1790,9 @@ button:active:not(:disabled) {
 .now-playing-card .top-pick-player {
   margin-bottom: 0;
   border-radius: 0;
+  /* The card around it rises in as one piece; animating the button as well
+     would slide it out from under its own opaque background. */
+  animation: none;
 }
 
 .now-playing-tip-button {
@@ -2226,6 +2319,7 @@ button:active:not(:disabled) {
   .live-grid,
   .setup-grid,
   .top-pick,
+  .now-playing-card,
   .guest-ballot {
     animation: rise-in 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
@@ -2389,6 +2483,13 @@ button:active:not(:disabled) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.picker-add-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
 }
 

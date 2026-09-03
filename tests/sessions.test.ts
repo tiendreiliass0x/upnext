@@ -38,6 +38,19 @@ function room(accountId: string, requestId = crypto.randomUUID()) {
 }
 
 describe("sessions", () => {
+  it("tells each reader whether they host the room, and nobody else", () => {
+    const host = account("+32470000094", "DJ Owl");
+    const guest = account("+32470000095", "Fan");
+    const created = room(host.id);
+
+    // The host reading their own room, however they arrived at it: a share
+    // link issues no host key, so this is what the crowd view has to go on.
+    expect(getSession(created.session.id, host.id)?.viewerIsHost).toBe(true);
+    expect(getSession(created.session.id, guest.id)?.viewerIsHost).toBe(false);
+    // A signed-out reader is nobody's host, and learns nothing about who is.
+    expect(getSession(created.session.id)?.viewerIsHost).toBe(false);
+  });
+
   it("identifies the DJ on the public room", () => {
     const host = account("+32470000096", "DJ Owl");
     const created = createSession({
@@ -596,5 +609,39 @@ describe("sessions", () => {
         accountId: guest.id,
       }),
     ).toBeNull();
+  });
+
+  it("keeps an opted-in room live past 24 hours until its host ends it", () => {
+    const host = account("+32470000022", "Long Set Host");
+    const guest = account("+32470000023", "Long Set Guest");
+    const created = createSession({
+      name: "Long Set",
+      venue: "Room 03",
+      accountId: host.id,
+      requestId: "long-set-room",
+      keepOpen: true,
+      tracks: [{ title: "First", artist: "Artist A" }],
+    });
+    getDatabase()
+      .prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+      .run("2000-01-01T00:00:00.000Z", created.session.id);
+
+    expect(getSession(created.session.id)?.id).toBe(created.session.id);
+    expect(getActiveHostSession(host.id)?.session.id).toBe(created.session.id);
+    expect(
+      toggleVote({
+        sessionId: created.session.id,
+        trackId: created.session.tracks[0].id,
+        accountId: guest.id,
+      })?.voted,
+    ).toBe(true);
+    expect(
+      endSession({
+        sessionId: created.session.id,
+        hostKey: created.hostKey,
+        accountId: host.id,
+      }),
+    ).toBe("ended");
+    expect(getSession(created.session.id)).toBeNull();
   });
 });

@@ -38,7 +38,12 @@ import {
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
-import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
+import {
+  classifyGuestOrigin,
+  maximumDraftTracks,
+  sessionLifetimeHours,
+  type GuestOriginReach,
+} from "@/lib/config";
 import { fetchWithTimeout, readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import { maximumAvatarBytes } from "@/lib/images";
@@ -71,7 +76,7 @@ type DraftTrack = {
   id: string;
   title: string;
   artist: string;
-  source: "demo" | "upload" | "playlist" | "library" | "soundcloud";
+  source: "upload" | "playlist" | "library" | ProviderId;
   file?: File;
   previewKey?: string;
   // Set only for a row picked from a connected service. The server re-reads
@@ -83,39 +88,6 @@ type DraftTrack = {
   permalinkUrl?: string;
   uploaderName?: string;
 };
-
-const demoTracks: DraftTrack[] = [
-  {
-    id: "demo-1",
-    title: "NUEVAYoL",
-    artist: "Bad Bunny",
-    source: "demo",
-  },
-  {
-    id: "demo-2",
-    title: "Sticky",
-    artist: "Tyler, The Creator",
-    source: "demo",
-  },
-  {
-    id: "demo-3",
-    title: "Guess",
-    artist: "Charli xcx feat. Billie Eilish",
-    source: "demo",
-  },
-  {
-    id: "demo-4",
-    title: "Messy",
-    artist: "Lola Young",
-    source: "demo",
-  },
-  {
-    id: "demo-5",
-    title: "APT.",
-    artist: "ROSÉ & Bruno Mars",
-    source: "demo",
-  },
-];
 
 function createClientId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -546,7 +518,8 @@ export default function Dashboard({
   const [venue, setVenue] = useState("Room 02");
   const [cashAppHandle, setCashAppHandle] = useState("");
   const [venmoHandle, setVenmoHandle] = useState("");
-  const [draftTracks, setDraftTracks] = useState<DraftTrack[]>(demoTracks);
+  const [keepOpen, setKeepOpen] = useState(false);
+  const [draftTracks, setDraftTracks] = useState<DraftTrack[]>([]);
   const [session, setSession] = useState<PublicSession | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(sharedSessionId);
   const [hostKey, setHostKey] = useState("");
@@ -793,7 +766,7 @@ export default function Dashboard({
         }
         setSessionName(data.playlist.name.slice(0, 80));
         setDraftTracks(
-          data.tracks.slice(0, 200).map((track) => ({
+          data.tracks.slice(0, maximumDraftTracks).map((track) => ({
             id: track.id,
             title: track.title,
             artist: track.artist,
@@ -1157,11 +1130,8 @@ export default function Dashboard({
 
     if (setupLockedRef.current) return;
     setDraftTracks((current) => {
-      const base = current.every((track) => track.source === "demo")
-        ? []
-        : current;
       const knownTracks = new Set(
-        base.map((track) => `${track.artist}-${track.title}`.toLowerCase()),
+        current.map((track) => `${track.artist}-${track.title}`.toLowerCase()),
       );
       const uniqueIncoming = incoming.filter((track) => {
         const key = `${track.artist}-${track.title}`.toLowerCase();
@@ -1170,19 +1140,40 @@ export default function Dashboard({
         return true;
       });
 
-      return [...base, ...uniqueIncoming].slice(0, 200);
+      return [...current, ...uniqueIncoming].slice(0, maximumDraftTracks);
     });
-    setError("");
+    setError(draftCapNotice(incoming.length, draftTracks));
+  }
+
+  /**
+   * What to tell the DJ after an add that could not take everything offered.
+   *
+   * `offered` arriving at the cap means the source itself stopped there — a
+   * library or playlist longer than a room holds — which is worth saying even
+   * when the draft had room for all of it. Counted against the draft as this
+   * render sees it: the write below is a functional update and stays correct
+   * either way, and only the wording could lag a second add landing in the
+   * same tick.
+   */
+  function draftCapNotice(offered: number, existing: DraftTrack[]) {
+    const room = Math.max(0, maximumDraftTracks - existing.length);
+    if (offered > room) {
+      const dropped = offered - room;
+      return `A room holds ${maximumDraftTracks} songs, so ${dropped} of these were not added.`;
+    }
+    if (offered >= maximumDraftTracks) {
+      return `Added the first ${maximumDraftTracks} songs, which is what one room holds.`;
+    }
+    return "";
   }
 
   function addLibraryTracks(picked: LibraryTrack[]) {
     if (setupLockedRef.current || picked.length === 0) return;
     setDraftTracks((current) => {
-      const base = current.every((track) => track.source === "demo") ? [] : current;
       // A catalogue song already has its preview, so the same song twice would
       // upload nothing but would still queue twice. Library tracks keep the
       // catalogue ID as their draft ID, so that is the key to compare on.
-      const known = new Set(base.map((track) => track.id));
+      const known = new Set(current.map((track) => track.id));
       const additions: DraftTrack[] = [];
       for (const track of picked) {
         const key = track.id;
@@ -1196,18 +1187,17 @@ export default function Dashboard({
           previewKey: track.libraryPreviewKey ?? undefined,
         });
       }
-      return [...base, ...additions].slice(0, 200);
+      return [...current, ...additions].slice(0, maximumDraftTracks);
     });
-    setError("");
+    setError(draftCapNotice(picked.length, draftTracks));
   }
 
   function addProviderTracks(picked: ProviderTrack[], provider: ProviderId) {
     if (setupLockedRef.current || picked.length === 0) return;
     setDraftTracks((current) => {
-      const base = current.every((track) => track.source === "demo") ? [] : current;
       // The provider's own ID is the draft ID, so picking the same song out of
       // two playlists queues it once, the way the library picker behaves.
-      const known = new Set(base.map((track) => track.id));
+      const known = new Set(current.map((track) => track.id));
       const additions: DraftTrack[] = [];
       for (const track of picked) {
         const key = `${provider}:${track.providerTrackId}`;
@@ -1217,7 +1207,7 @@ export default function Dashboard({
           id: key,
           title: track.title,
           artist: track.artist,
-          source: "soundcloud",
+          source: provider,
           provider,
           providerTrackId: track.providerTrackId,
           artworkUrl: track.artworkUrl,
@@ -1225,9 +1215,9 @@ export default function Dashboard({
           uploaderName: track.uploaderName,
         });
       }
-      return [...base, ...additions].slice(0, 200);
+      return [...current, ...additions].slice(0, maximumDraftTracks);
     });
-    setError("");
+    setError(draftCapNotice(picked.length, draftTracks));
   }
 
   async function startSession() {
@@ -1303,6 +1293,16 @@ export default function Dashboard({
       if (!sessionRequestIdRef.current) {
         sessionRequestIdRef.current = createClientId();
       }
+      // The route re-reads every imported row from the provider before the
+      // room exists, a few lookups at a time, so this POST is not the small
+      // JSON round trip the 8s default is sized for. A whole playlist past
+      // that deadline aborts a request the server goes on to finish, leaving
+      // the DJ on the setup form for a room that is already live. The retry
+      // stays safe either way: requestId is held until a room comes back, and
+      // the route answers a repeat with the room it already made.
+      const importedTracks = preparedTracks.filter(
+        (track) => track.providerTrackId,
+      ).length;
       const response = await fetchWithTimeout("/api/sessions", {
         method: "POST",
         headers: {
@@ -1314,6 +1314,7 @@ export default function Dashboard({
           venue,
           cashAppHandle,
           venmoHandle,
+          keepOpen,
           requestId: sessionRequestIdRef.current,
           // Only the handle travels for an imported row. The server reads
           // the title, artwork and link back from the service itself, so a
@@ -1328,7 +1329,7 @@ export default function Dashboard({
             }),
           ),
         }),
-      });
+      }, Math.min(30_000 + importedTracks * 1_000, 5 * 60_000));
       const data = (await response.json()) as {
         session?: PublicSession;
         hostKey?: string;
@@ -1861,6 +1862,7 @@ export default function Dashboard({
           venue={venue}
           cashAppHandle={cashAppHandle}
           venmoHandle={venmoHandle}
+          keepOpen={keepOpen}
           tracks={draftTracks}
           isDragging={isDragging}
           isStarting={isStarting}
@@ -1869,6 +1871,7 @@ export default function Dashboard({
           onVenueChange={setVenue}
           onCashAppHandleChange={setCashAppHandle}
           onVenmoHandleChange={setVenmoHandle}
+          onKeepOpenChange={setKeepOpen}
           onAddFiles={addFiles}
           onDragChange={setIsDragging}
           onRemoveTrack={(trackId) =>
@@ -1878,7 +1881,6 @@ export default function Dashboard({
             )
           }
           onClear={() => !isStarting && setDraftTracks([])}
-          onRestoreDemo={() => !isStarting && setDraftTracks(demoTracks)}
           accountToken={accountToken}
           onAddLibraryTracks={addLibraryTracks}
           onAddProviderTracks={addProviderTracks}
@@ -1928,6 +1930,7 @@ export default function Dashboard({
         <GuestRoom
           session={session ?? previewSession}
           isPreview={!activeSessionId}
+          isHost={Boolean(hostKey)}
           isLoading={isLoadingSession}
           votedTrackIds={votedTrackIds}
           pendingVotes={pendingVotes}
@@ -1966,7 +1969,11 @@ export function LibraryPicker({
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
+  const [isAddingLibrary, setIsAddingLibrary] = useState(false);
   const [pickerError, setPickerError] = useState("");
+  // "Add entire library" outlives this component when the DJ starts the session
+  // mid-request, so it asks before reporting back.
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     if (!accountToken) return;
@@ -1993,6 +2000,10 @@ export function LibraryPicker({
     };
   }, [accountToken]);
 
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
   useEffect(() => {
     if (!accountToken || !libraryId) {
       setTracks([]);
@@ -2003,6 +2014,9 @@ export function LibraryPicker({
     const timer = window.setTimeout(() => {
       void (async () => {
         setIsLoading(true);
+        // This load owns the error slate from the moment it starts. Clearing
+        // on success instead would wipe what a slower add just reported.
+        setPickerError("");
         try {
           const response = await fetchWithTimeout(
             `/api/libraries/${encodeURIComponent(libraryId)}/tracks?q=${encodeURIComponent(query)}`,
@@ -2018,10 +2032,7 @@ export function LibraryPicker({
           if (!response.ok || !data.tracks) {
             throw new Error(data.error || "The library could not be read.");
           }
-          if (!cancelled) {
-            setTracks(data.tracks);
-            setPickerError("");
-          }
+          if (!cancelled) setTracks(data.tracks);
         } catch (error) {
           if (!cancelled) setPickerError(getErrorMessage(error));
         } finally {
@@ -2034,6 +2045,45 @@ export function LibraryPicker({
       window.clearTimeout(timer);
     };
   }, [accountToken, libraryId, query]);
+
+  async function addEntireLibrary() {
+    if (!libraryId || isAddingLibrary) return;
+    // With no search term the debounced load above already holds every row a
+    // reload would return, so the common path costs no round trip.
+    if (!query.trim() && tracks.length > 0) {
+      onAdd(tracks);
+      setPicked(new Set());
+      return;
+    }
+    setIsAddingLibrary(true);
+    setPickerError("");
+    try {
+      const response = await fetchWithTimeout(
+        `/api/libraries/${encodeURIComponent(libraryId)}/tracks?q=`,
+        {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accountToken}` },
+        },
+      );
+      const data = await readJson<{ tracks?: LibraryTrack[]; error?: string }>(
+        response,
+      );
+      if (!response.ok || !data.tracks) {
+        throw new Error(data.error || "The library could not be read.");
+      }
+      if (!mountedRef.current) return;
+      if (data.tracks.length === 0) {
+        setPickerError("This library has no songs.");
+        return;
+      }
+      onAdd(data.tracks);
+      setPicked(new Set());
+    } catch (error) {
+      if (mountedRef.current) setPickerError(getErrorMessage(error));
+    } finally {
+      if (mountedRef.current) setIsAddingLibrary(false);
+    }
+  }
 
   // Nothing to show before the catalogue has any libraries in it.
   if (!accountToken || libraries === null || libraries.length === 0) return null;
@@ -2112,20 +2162,31 @@ export function LibraryPicker({
         </ul>
       )}
 
-      <button
-        type="button"
-        className="secondary-button"
-        disabled={disabled || selected.length === 0}
-        onClick={() => {
-          onAdd(selected);
-          setPicked(new Set());
-        }}
-      >
-        <Plus size={16} />
-        {selected.length === 0
-          ? "Select songs to add"
-          : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
-      </button>
+      <div className="picker-add-actions">
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={disabled || selected.length === 0}
+          onClick={() => {
+            onAdd(selected);
+            setPicked(new Set());
+          }}
+        >
+          <Plus size={16} />
+          {selected.length === 0
+            ? "Select songs to add"
+            : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={disabled || !libraryId || isAddingLibrary}
+          onClick={() => void addEntireLibrary()}
+        >
+          <Plus size={16} />
+          {isAddingLibrary ? "Adding library..." : "Add entire library"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -2135,6 +2196,7 @@ type DJSetupProps = {
   venue: string;
   cashAppHandle: string;
   venmoHandle: string;
+  keepOpen: boolean;
   tracks: DraftTrack[];
   isDragging: boolean;
   isStarting: boolean;
@@ -2143,11 +2205,11 @@ type DJSetupProps = {
   onVenueChange: (value: string) => void;
   onCashAppHandleChange: (value: string) => void;
   onVenmoHandleChange: (value: string) => void;
+  onKeepOpenChange: (value: boolean) => void;
   onAddFiles: (files: FileList | File[]) => Promise<void>;
   onDragChange: (value: boolean) => void;
   onRemoveTrack: (trackId: string) => void;
   onClear: () => void;
-  onRestoreDemo: () => void;
   accountToken: string;
   onAddLibraryTracks: (tracks: LibraryTrack[]) => void;
   onAddProviderTracks: (tracks: ProviderTrack[], provider: ProviderId) => void;
@@ -2159,6 +2221,7 @@ function DJSetup({
   venue,
   cashAppHandle,
   venmoHandle,
+  keepOpen,
   tracks,
   isDragging,
   isStarting,
@@ -2167,11 +2230,11 @@ function DJSetup({
   onVenueChange,
   onCashAppHandleChange,
   onVenmoHandleChange,
+  onKeepOpenChange,
   onAddFiles,
   onDragChange,
   onRemoveTrack,
   onClear,
-  onRestoreDemo,
   accountToken,
   onAddLibraryTracks,
   onAddProviderTracks,
@@ -2183,6 +2246,14 @@ function DJSetup({
   const cashAppMessage = tipHandleError("cashApp", cashAppHandle);
   const venmoMessage = tipHandleError("venmo", venmoHandle);
   const tipHandlesBroken = Boolean(cashAppMessage || venmoMessage);
+  const launchDisabled =
+    isStarting ||
+    tracks.length === 0 ||
+    !sessionName.trim() ||
+    tipHandlesBroken;
+  const launchLabel = isStarting
+    ? uploadProgress || "Opening room..."
+    : "Start session";
 
   return (
     <main className="setup-page page-shell">
@@ -2306,6 +2377,83 @@ function DJSetup({
                 </span>
               </label>
 
+              <section className="setup-finalize" aria-labelledby="tips-title">
+                <div className="section-heading">
+                  <h2 id="tips-title">Let the crowd tip you</h2>
+                  <p>
+                    Optional. Add either handle and fans can tip you after voting
+                    for a song.
+                  </p>
+                </div>
+                <div className="field-grid tip-fields">
+                  <label className="field">
+                    <span>Cash App <small>optional</small></span>
+                    <input
+                      type="text"
+                      value={cashAppHandle}
+                      maxLength={21}
+                      placeholder="$cashtag"
+                      autoCapitalize="none"
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={isStarting}
+                      aria-invalid={Boolean(cashAppMessage)}
+                      aria-describedby={cashAppMessage ? "cash-app-error" : undefined}
+                      onChange={(event) => onCashAppHandleChange(event.target.value)}
+                    />
+                    {cashAppMessage && (
+                      <small className="field-error" id="cash-app-error">
+                        {cashAppMessage}
+                      </small>
+                    )}
+                  </label>
+                  <label className="field">
+                    <span>Venmo <small>optional</small></span>
+                    <input
+                      type="text"
+                      value={venmoHandle}
+                      maxLength={31}
+                      placeholder="@username"
+                      autoCapitalize="none"
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={isStarting}
+                      aria-invalid={Boolean(venmoMessage)}
+                      aria-describedby={venmoMessage ? "venmo-error" : undefined}
+                      onChange={(event) => onVenmoHandleChange(event.target.value)}
+                    />
+                    {venmoMessage && (
+                      <small className="field-error" id="venmo-error">
+                        {venmoMessage}
+                      </small>
+                    )}
+                  </label>
+                </div>
+                <p className="tip-setup-note">
+                  These handles are public and fixed once this room goes live.
+                  Use profiles you own that are eligible to receive business
+                  payments.
+                </p>
+                <label className="session-lifetime-toggle">
+                  <input
+                    type="checkbox"
+                    checked={keepOpen}
+                    disabled={isStarting}
+                    onChange={(event) => onKeepOpenChange(event.target.checked)}
+                  />
+                  <span className="toggle-track" aria-hidden="true">
+                    <span />
+                  </span>
+                  <span className="toggle-copy">
+                    <strong>Keep session live until I end it</strong>
+                    <small>
+                      Otherwise, this session closes automatically after{" "}
+                      {sessionLifetimeHours} hours.
+                    </small>
+                  </span>
+                </label>
+              </section>
+
               {tracks.length > 0 ? (
                 <div className="draft-list">
                   <div className="draft-list-meta">
@@ -2347,80 +2495,10 @@ function DJSetup({
                   <ListMusic size={26} strokeWidth={1.6} />
                   <div>
                     <strong>Your set is empty</strong>
-                    <p>Add files above or restore the example playlist.</p>
+                    <p>Add files or choose music above.</p>
                   </div>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={onRestoreDemo}
-                    disabled={isStarting}
-                  >
-                    Restore demo
-                  </button>
                 </div>
               )}
-            </div>
-          </section>
-
-          <section className="form-section" aria-labelledby="tips-title">
-            <div className="section-number">03</div>
-            <div className="section-content">
-              <div className="section-heading">
-                <h2 id="tips-title">Let the crowd tip you</h2>
-                <p>
-                  Optional. Add either handle and fans can tip you after voting
-                  for a song.
-                </p>
-              </div>
-              <div className="field-grid tip-fields">
-                <label className="field">
-                  <span>Cash App <small>optional</small></span>
-                  <input
-                    type="text"
-                    value={cashAppHandle}
-                    maxLength={21}
-                    placeholder="$cashtag"
-                    autoCapitalize="none"
-                    autoComplete="off"
-                    spellCheck={false}
-                    disabled={isStarting}
-                    aria-invalid={Boolean(cashAppMessage)}
-                    aria-describedby={cashAppMessage ? "cash-app-error" : undefined}
-                    onChange={(event) => onCashAppHandleChange(event.target.value)}
-                  />
-                  {cashAppMessage && (
-                    <small className="field-error" id="cash-app-error">
-                      {cashAppMessage}
-                    </small>
-                  )}
-                </label>
-                <label className="field">
-                  <span>Venmo <small>optional</small></span>
-                  <input
-                    type="text"
-                    value={venmoHandle}
-                    maxLength={31}
-                    placeholder="@username"
-                    autoCapitalize="none"
-                    autoComplete="off"
-                    spellCheck={false}
-                    disabled={isStarting}
-                    aria-invalid={Boolean(venmoMessage)}
-                    aria-describedby={venmoMessage ? "venmo-error" : undefined}
-                    onChange={(event) => onVenmoHandleChange(event.target.value)}
-                  />
-                  {venmoMessage && (
-                    <small className="field-error" id="venmo-error">
-                      {venmoMessage}
-                    </small>
-                  )}
-                </label>
-              </div>
-              <p className="tip-setup-note">
-                These handles are public and fixed once this room goes live.
-                Use profiles you own that are eligible to receive business
-                payments.
-              </p>
             </div>
           </section>
         </div>
@@ -2450,16 +2528,9 @@ function DJSetup({
             type="button"
             className="primary-button launch-button"
             onClick={onStart}
-            disabled={
-              isStarting ||
-              tracks.length === 0 ||
-              !sessionName.trim() ||
-              tipHandlesBroken
-            }
+            disabled={launchDisabled}
           >
-            <span>
-              {isStarting ? uploadProgress || "Opening room..." : "Start session"}
-            </span>
+            <span>{launchLabel}</span>
             <ArrowRight size={20} />
           </button>
           <small className="launch-note">
@@ -2657,6 +2728,12 @@ function DJLiveRoom({
 type GuestRoomProps = {
   session: PublicSession;
   isPreview: boolean;
+  /**
+   * Whether this tab holds the room's host key. Only half the answer — a DJ
+   * who opened their own room through the share link holds none — so it is
+   * read together with the room's own view of who is looking.
+   */
+  isHost: boolean;
   isLoading: boolean;
   votedTrackIds: Set<string>;
   pendingVotes: Set<string>;
@@ -3261,6 +3338,7 @@ function ProfileSheet({
 function GuestRoom({
   session,
   isPreview,
+  isHost,
   isLoading,
   votedTrackIds,
   pendingVotes,
@@ -3302,16 +3380,26 @@ function GuestRoom({
   // Optional chaining, not a type lie: during a rolling deploy this bundle
   // polls instances that predate tipLinks, and a room whose guests see a
   // blank page is worse than one with no tip buttons.
-  const tippingEnabled = Boolean(
+  const hasTipLinks = Boolean(
     session.tipLinks?.cashApp || session.tipLinks?.venmo,
   );
-  const tipEligibleTrackIds = new Set(
-    session.tipEligibleTrackIds ?? session.votedTrackIds,
-  );
+  // Only someone who is actually in the crowd is offered the action: a DJ on
+  // this side of their own room would be tipping themselves, whether they got
+  // here from the booth or by opening their own link, and the preview has no
+  // room to tip into yet.
+  const tippingEnabled =
+    hasTipLinks && !isHost && !session.viewerIsHost && !isPreview;
   const nowPlayingTrackId = session.nowPlaying?.trackId;
   const nowPlayingTrack = nowPlayingTrackId
     ? session.tracks.find((track) => track.id === nowPlayingTrackId)
     : undefined;
+  // Saved picks whose ballot row still carries a tip. The song on now is left
+  // out: the card above the ballot already offers that tip, and two buttons
+  // opening the same sheet read as two separate tips.
+  const rowTipTrackIds = new Set(
+    session.tipEligibleTrackIds ?? session.votedTrackIds,
+  );
+  if (nowPlayingTrackId) rowTipTrackIds.delete(nowPlayingTrackId);
   if (isLoading) return <LoadingRoom label="Joining the room" />;
 
   const topTrack = session.tracks.find((track) => track.cooldown === 0);
@@ -3406,8 +3494,9 @@ function GuestRoom({
           <QueueList
             tracks={session.tracks}
             interactive={!isPreview}
+            nowPlayingTrackId={nowPlayingTrackId ?? null}
             votedTrackIds={votedTrackIds}
-            tipEligibleTrackIds={tipEligibleTrackIds}
+            tipEligibleTrackIds={rowTipTrackIds}
             pendingVotes={pendingVotes}
             lockSelectedVotes={isAnonymous}
             onVote={onVote}
@@ -3807,11 +3896,13 @@ export function QueueList({
               <strong>{track.title}</strong>
               <small>
                 {track.artist}
-                {cooling
-                  ? ` · cooldown: ${track.cooldown} more song${track.cooldown === 1 ? "" : "s"}`
-                  : played && !onNow
-                    ? " · played"
-                    : ""}
+                {onNow
+                  ? " · on now"
+                  : cooling
+                    ? ` · cooldown: ${track.cooldown} more song${track.cooldown === 1 ? "" : "s"}`
+                    : played
+                      ? " · played"
+                      : ""}
                 {onPlay && !track.previewUrl ? " · no audio" : ""}
               </small>
               <TrackAttribution source={track.source} />
@@ -3832,7 +3923,9 @@ export function QueueList({
                 type="button"
                 className={`vote-button ${hasVote ? "has-vote" : ""}`}
                 onClick={() => onVote?.(track.id)}
-                disabled={cooling || isPending || (lockSelectedVotes && hasVote)}
+                disabled={
+                  cooling || onNow || isPending || (lockSelectedVotes && hasVote)
+                }
                 aria-label={`${hasVote ? lockSelectedVotes ? "Vote saved for" : "Remove vote from" : "Vote for"} ${track.title}, ${track.votes} ${track.votes === 1 ? "vote" : "votes"}`}
                 aria-pressed={hasVote}
               >

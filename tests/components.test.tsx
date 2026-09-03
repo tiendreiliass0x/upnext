@@ -501,6 +501,19 @@ describe("library picker", () => {
     expect(picked[0].libraryPreviewKey).toBe("previews/curator/sunrise.mp3");
   });
 
+  it("adds the entire in-house library without individual picks", async () => {
+    mockApi();
+    const onAdd = vi.fn();
+    render(<LibraryPicker accountToken="t" onAdd={onAdd} />);
+
+    await screen.findByRole("checkbox", { name: /sunrise/i });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add entire library" }),
+    );
+
+    await waitFor(() => expect(onAdd).toHaveBeenCalledWith(libraryTracks));
+  });
+
   it("marks a catalogue entry that has no preview", async () => {
     mockApi();
     render(<LibraryPicker accountToken="t" onAdd={() => {}} />);
@@ -804,7 +817,7 @@ describe("tip handles in the setup form", () => {
     ).toBeInTheDocument();
     // Nothing to launch into: the room would refuse this handle, so the DJ is
     // not sent through an upload to be told so.
-    expect(screen.getByRole("button", { name: /start session/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start session" })).toBeDisabled();
     expect(screen.queryByText("Crowd tips enabled")).not.toBeInTheDocument();
   });
 
@@ -818,6 +831,28 @@ describe("tip handles in the setup form", () => {
       screen.queryByText(/cashtag that starts with a letter/i),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Crowd tips enabled")).toBeInTheDocument();
+  });
+
+  it("keeps payment details ahead of the track state, under one start action", async () => {
+    const { field } = await typeCashtag("$DJOwl");
+    const uploader = screen.getByText("Choose files").closest("label");
+    const trackState = document.querySelector(".empty-tracks");
+
+    expect(uploader).not.toBeNull();
+    expect(trackState).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore demo" })).toBeNull();
+    expect(
+      uploader?.compareDocumentPosition(field) ?? 0,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(field.compareDocumentPosition(trackState as Node)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // One Start, and it lives in the launch panel: the aside is sticky beside
+    // the form on desktop and a bar pinned to the bottom below 900px, so the
+    // action is always in reach without a second copy inside the form.
+    const starts = screen.getAllByRole("button", { name: "Start session" });
+    expect(starts).toHaveLength(1);
+    expect(starts[0].closest(".launch-panel")).not.toBeNull();
   });
 });
 
@@ -963,7 +998,35 @@ describe("external tips", () => {
             account: { id: "host", pseudonym: "DJ Owl", phoneLast4: "1234" },
           });
         }
-        if (url === "/api/libraries") return Response.json({ libraries: [] });
+        if (url === "/api/libraries") {
+          return Response.json({
+            libraries: [
+              {
+                id: "lib-1",
+                name: "House picks",
+                description: "",
+                trackCount: 1,
+                createdAt: "",
+              },
+            ],
+          });
+        }
+        if (url.startsWith("/api/libraries/lib-1/tracks")) {
+          return Response.json({
+            tracks: [
+              {
+                id: "lt-1",
+                libraryId: "lib-1",
+                title: "Sunrise",
+                artist: "Kora",
+                previewUrl: "/api/library-tracks/lt-1/preview",
+                libraryPreviewKey: "previews/curator/sunrise.mp3",
+                contributedBy: null,
+                createdAt: "",
+              },
+            ],
+          });
+        }
         if (url === "/api/sessions" && init?.method === "POST") {
           creationBody = JSON.parse(String(init.body)) as Record<string, unknown>;
           return Response.json(
@@ -983,6 +1046,14 @@ describe("external tips", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<Dashboard />);
 
+    await user.click(
+      await screen.findByRole("button", { name: "Add entire library" }),
+    );
+    const keepOpen = screen.getByRole("checkbox", {
+      name: /keep session live until i end it/i,
+    });
+    expect(keepOpen).not.toBeChecked();
+    await user.click(keepOpen);
     const cashApp = await screen.findByLabelText(/Cash App/i);
     const venmo = screen.getByLabelText(/Venmo/i);
     await user.type(cashApp, "$DJOwl");
@@ -993,6 +1064,7 @@ describe("external tips", () => {
     expect(creationBody).toMatchObject({
       cashAppHandle: "$DJOwl",
       venmoHandle: "@dj-owl",
+      keepOpen: true,
     });
     expect(JSON.parse(window.localStorage.getItem("upnext-tip-handles") ?? "null")).toEqual({
       cashAppHandle: "$DJOwl",
@@ -1108,7 +1180,7 @@ describe("starting a room from a playlist", () => {
     expect(roomCreations).toHaveLength(0);
   });
 
-  it("keeps the demo draft and explains when the playlist is not the DJ's", async () => {
+  it("keeps an empty draft and explains when the playlist is not the DJ's", async () => {
     mountWithPlaylist(() =>
       Response.json({ error: "That playlist could not be found." }, { status: 404 }),
     );
@@ -1116,6 +1188,7 @@ describe("starting a room from a playlist", () => {
       await screen.findByText("That playlist could not be found.", {}, { timeout: 3000 }),
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("Friday After Dark")).toBeInTheDocument();
+    expect(screen.getByText("Your set is empty")).toBeInTheDocument();
   });
 });
 
@@ -1200,11 +1273,13 @@ describe("now playing", () => {
     const dock = await screen.findByRole("region", { name: "Now playing" }, { timeout: 3000 });
     expect(within(dock).getByText("First Track")).toBeInTheDocument();
     expect(within(dock).getByRole("button", { name: "Listen along" })).toBeEnabled();
-    // The crowd pick is the next song off cooldown; one still cooling cannot be
-    // voted for and says how long it has left.
+    // The crowd pick is the next song off cooldown. The song on now says so
+    // rather than reporting the cooldown its own play just started, and its
+    // vote stays shut until it is off.
     expect(screen.getByText(/Second Track is ranked first/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /vote for first track/i })).toBeDisabled();
-    expect(screen.getByText(/cooldown: 2 more songs/)).toBeInTheDocument();
+    expect(screen.getByText(/· on now/)).toBeInTheDocument();
+    expect(screen.queryByText(/cooldown: 2 more songs/)).not.toBeInTheDocument();
   });
 
   /**
@@ -1725,6 +1800,94 @@ describe("the crowd's now-playing card", () => {
     const dialog = screen.getByRole("dialog", { name: "Tip for this pick" });
     expect(within(dialog).getByText("Second Track")).toBeInTheDocument();
     expect(within(dialog).getByText("Artist B")).toBeInTheDocument();
+  });
+
+  it("leaves the tip on the card, not twice, for the song on now", async () => {
+    const room = nowPlayingRoom();
+    room.tipLinks = { cashApp: "https://cash.app/$DJOwl", venmo: null };
+    room.tipEligibleTrackIds = ["track-one", "track-two"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: room })),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Open tip options for now playing Second Track by Artist B",
+      }),
+    ).toBeInTheDocument();
+    // The card above the ballot already carries track-two's tip, so its row
+    // stays quiet rather than opening the same sheet from two buttons.
+    expect(
+      screen.queryByRole("button", {
+        name: "Open tip options for Second Track by Artist B, row 2",
+      }),
+    ).not.toBeInTheDocument();
+    // A saved pick that is not on now keeps its row button.
+    expect(
+      screen.getByRole("button", {
+        name: "Open tip options for First Track by Artist A, row 1",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Tip for this pick")).toHaveLength(2);
+  });
+
+  it("offers the DJ no tip when they open their own room by link", async () => {
+    const room = nowPlayingRoom();
+    room.tipLinks = { cashApp: "https://cash.app/$DJOwl", venmo: null };
+    room.tipEligibleTrackIds = ["track-one", "track-two"];
+    // No host key is issued on the share-link path, so the room itself has to
+    // say who is reading it.
+    room.viewerIsHost = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: room })),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    expect(
+      await screen.findByRole("button", { name: "Listen to Second Track" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Tip for this pick")).not.toBeInTheDocument();
+  });
+
+  it("offers the DJ no tip on the room they host", async () => {
+    const user = userEvent.setup();
+    const room = nowPlayingRoom();
+    room.tipLinks = { cashApp: "https://cash.app/$DJOwl", venmo: null };
+    room.tipEligibleTrackIds = ["track-one", "track-two"];
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/accounts") {
+          return Response.json({
+            account: { id: "host", pseudonym: "DJ Owl", phoneLast4: "1234" },
+          });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({
+            activeRoom: { session: room, hostKey: "host-key" },
+            guestBaseUrl: "https://upnext.example",
+          });
+        }
+        return Response.json({ session: room });
+      }),
+    );
+
+    render(<Dashboard />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Crowd view" }, { timeout: 3000 }),
+    );
+
+    // The room is live, not a preview, but the tip links are the DJ's own.
+    expect(await screen.findByText("Live · DJ Owl Radio")).toBeInTheDocument();
+    expect(screen.queryByText("Tip for this pick")).not.toBeInTheDocument();
   });
 
   it("goes quiet when the room has played past the preview", async () => {

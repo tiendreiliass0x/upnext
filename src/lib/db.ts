@@ -68,6 +68,7 @@ export function getDatabase() {
       venmo_handle TEXT,
       created_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
+      keep_open INTEGER NOT NULL DEFAULT 0 CHECK (keep_open IN (0, 1)),
       ended_at TEXT,
       -- What the DJ has on: a soft pointer into tracks, cleared with the row.
       now_playing_track_id TEXT,
@@ -316,6 +317,11 @@ export function getDatabase() {
   }
   if (!sessionColumns.some((column) => column.name === "venmo_handle")) {
     database.exec("ALTER TABLE sessions ADD COLUMN venmo_handle TEXT");
+  }
+  if (!sessionColumns.some((column) => column.name === "keep_open")) {
+    database.exec(
+      "ALTER TABLE sessions ADD COLUMN keep_open INTEGER NOT NULL DEFAULT 0 CHECK (keep_open IN (0, 1))",
+    );
   }
   const trackColumns = database.pragma("table_info(tracks)") as Array<{
     name: string;

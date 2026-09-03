@@ -1,3 +1,4 @@
+import { sessionLifetimeMs } from "@/lib/config";
 import { getDatabase } from "@/lib/db";
 import { avatarUrlFor } from "@/lib/profile";
 import type { ProviderId } from "@/lib/providers/types";
@@ -85,6 +86,13 @@ export type PublicSession = {
   votedTrackIds: string[];
   /** Saved picks that may still be tipped after their vote was spent by a play. */
   tipEligibleTrackIds?: string[];
+  /**
+   * Whether the account reading this payload hosts the room. Says nothing
+   * about anyone else, so it is safe in a body every guest receives, and it
+   * answers the question a host key cannot: a DJ who opened their own room
+   * through the share link holds no key in that tab but is still the host.
+   */
+  viewerIsHost?: boolean;
   anonymousVoteUsed: boolean;
   nowPlaying: NowPlaying | null;
   /**
@@ -99,6 +107,7 @@ export type PublicSession = {
 type SessionRow = {
   id: string;
   name: string;
+  host_account_id: string;
   dj_name: string;
   dj_avatar_key: string | null;
   dj_tagline: string;
@@ -301,8 +310,6 @@ function trackSource(track: TrackRow): TrackSource | null {
   };
 }
 
-const sessionLifetime = 24 * 60 * 60 * 1000;
-
 function createSessionId() {
   const database = getDatabase();
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -322,7 +329,8 @@ function expireOldSessions() {
   const now = new Date().toISOString();
   getDatabase()
     .prepare(
-      "UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL AND expires_at <= ?",
+      `UPDATE sessions SET ended_at = ?
+       WHERE ended_at IS NULL AND keep_open = 0 AND expires_at <= ?`,
     )
     .run(now, now);
 }
@@ -332,14 +340,15 @@ function getPublicSession(sessionId: string, accountId?: string) {
   return database.transaction(() => {
     const session = database
       .prepare(
-        `SELECT s.id, s.name, a.pseudonym AS dj_name,
+        `SELECT s.id, s.name, s.host_account_id, a.pseudonym AS dj_name,
                 a.avatar_key AS dj_avatar_key, a.tagline AS dj_tagline,
                 s.cash_app_handle,
                 s.venmo_handle, s.venue, s.created_at,
                 s.expires_at, s.ended_at, s.revision,
                 s.now_playing_track_id, s.now_playing_started_at
          FROM sessions s JOIN accounts a ON a.id = s.host_account_id
-         WHERE s.id = ? AND s.ended_at IS NULL AND s.expires_at > ?`,
+         WHERE s.id = ? AND s.ended_at IS NULL
+           AND (s.keep_open = 1 OR s.expires_at > ?)`,
       )
       .get(sessionId.toUpperCase(), new Date().toISOString()) as
       | SessionRow
@@ -422,6 +431,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
       guestCount: totals.guest_count,
       votedTrackIds,
       tipEligibleTrackIds: accountVotes.map((vote) => vote.track_id),
+      viewerIsHost: Boolean(accountId) && session.host_account_id === accountId,
       anonymousVoteUsed: false,
       voters: getRoomVoters(session.id),
       nowPlaying:
@@ -460,6 +470,7 @@ export function createSession(input: {
   venue: string;
   accountId: string;
   requestId?: string | null;
+  keepOpen?: boolean;
   tipHandles?: TipHandles;
   tracks: Array<{
     title: string;
@@ -501,17 +512,20 @@ export function createSession(input: {
         database
           .prepare(
             `UPDATE sessions
-                SET cash_app_handle = ?, venmo_handle = ?,
+                SET cash_app_handle = ?, venmo_handle = ?, keep_open = ?,
                     revision = revision + 1
               WHERE id = ?
-                AND (cash_app_handle IS NOT ? OR venmo_handle IS NOT ?)`,
+                AND (cash_app_handle IS NOT ? OR venmo_handle IS NOT ?
+                     OR keep_open != ?)`,
           )
           .run(
             tipHandles.cashApp,
             tipHandles.venmo,
+            input.keepOpen ? 1 : 0,
             existing.id,
             tipHandles.cashApp,
             tipHandles.venmo,
+            input.keepOpen ? 1 : 0,
           );
         return { id: existing.id, hostKey: existing.host_key };
       }
@@ -520,13 +534,13 @@ export function createSession(input: {
     const id = createSessionId();
     const hostKey = crypto.randomUUID();
     const createdAt = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + sessionLifetime).toISOString();
+    const expiresAt = new Date(Date.now() + sessionLifetimeMs).toISOString();
     database
       .prepare(
         `INSERT INTO sessions
           (id, name, venue, host_account_id, host_key, request_id,
-           cash_app_handle, venmo_handle, revision, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+           cash_app_handle, venmo_handle, keep_open, revision, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       )
       .run(
         id,
@@ -539,6 +553,7 @@ export function createSession(input: {
         input.requestId || null,
         tipHandles.cashApp,
         tipHandles.venmo,
+        input.keepOpen ? 1 : 0,
         createdAt,
         expiresAt,
       );
@@ -604,7 +619,8 @@ export function getSessionRevision(id: string) {
   const row = getDatabase()
     .prepare(
       `SELECT id, revision FROM sessions
-       WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+       WHERE id = ? AND ended_at IS NULL
+         AND (keep_open = 1 OR expires_at > ?)`,
     )
     .get(id.toUpperCase(), new Date().toISOString()) as
     | { id: string; revision: number }
@@ -633,6 +649,8 @@ export function getAnonymousSession(id: string, voterId: string) {
     // the song has not played since, so the guest can re-tap it afterwards.
     votedTrackIds: rows.filter((row) => row.live).map((row) => row.track_id),
     tipEligibleTrackIds: rows.map((row) => row.track_id),
+    // Nobody hosts a room from a browser that has never signed in.
+    viewerIsHost: false,
     anonymousVoteUsed: claimed || rows.length > 0,
   };
 }
@@ -641,7 +659,8 @@ export function getActiveHostSession(accountId: string) {
   const row = getDatabase()
     .prepare(
       `SELECT id, host_key FROM sessions
-       WHERE host_account_id = ? AND ended_at IS NULL AND expires_at > ?
+       WHERE host_account_id = ? AND ended_at IS NULL
+         AND (keep_open = 1 OR expires_at > ?)
        ORDER BY created_at DESC LIMIT 1`,
     )
     .get(accountId, new Date().toISOString()) as
@@ -669,7 +688,8 @@ export function endSession(input: {
       const session = database
         .prepare(
           `SELECT id, host_key, host_account_id FROM sessions
-           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+           WHERE id = ? AND ended_at IS NULL
+             AND (keep_open = 1 OR expires_at > ?)`,
         )
         .get(input.sessionId.toUpperCase(), now) as
         | { id: string; host_key: string; host_account_id: string }
@@ -720,7 +740,8 @@ export function setNowPlaying(input: {
       const session = database
         .prepare(
           `SELECT id, host_key, host_account_id, now_playing_track_id FROM sessions
-           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+           WHERE id = ? AND ended_at IS NULL
+             AND (keep_open = 1 OR expires_at > ?)`,
         )
         .get(input.sessionId.toUpperCase(), now) as
         | {
@@ -819,7 +840,8 @@ export function toggleVote(input: {
       const session = database
         .prepare(
           `SELECT id FROM sessions
-           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+           WHERE id = ? AND ended_at IS NULL
+             AND (keep_open = 1 OR expires_at > ?)`,
         )
         .get(input.sessionId.toUpperCase(), new Date().toISOString()) as
         | { id: string }
@@ -891,7 +913,8 @@ export function castAnonymousVote(input: {
       const session = database
         .prepare(
           `SELECT id FROM sessions
-           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+           WHERE id = ? AND ended_at IS NULL
+             AND (keep_open = 1 OR expires_at > ?)`,
         )
         .get(input.sessionId.toUpperCase(), new Date().toISOString()) as
         | { id: string }
@@ -1030,7 +1053,8 @@ export function getTrackPreviewKey(trackId: string) {
        FROM tracks t
        JOIN sessions s ON s.id = t.session_id
        WHERE t.id = ? AND t.preview_key IS NOT NULL
-         AND s.ended_at IS NULL AND s.expires_at > ?`,
+          AND s.ended_at IS NULL
+          AND (s.keep_open = 1 OR s.expires_at > ?)`,
     )
     .get(trackId, new Date().toISOString()) as
     | { preview_key: string }
@@ -1054,7 +1078,8 @@ export function getTrackProviderRef(trackId: string) {
        WHERE t.id = ?
          AND t.provider IS NOT NULL AND t.provider_track_id IS NOT NULL
          AND t.permalink_url IS NOT NULL
-         AND s.ended_at IS NULL AND s.expires_at > ?`,
+          AND s.ended_at IS NULL
+          AND (s.keep_open = 1 OR s.expires_at > ?)`,
     )
     .get(trackId, new Date().toISOString()) as
     | { provider: string; provider_track_id: string; host_account_id: string }

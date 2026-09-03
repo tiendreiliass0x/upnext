@@ -35,18 +35,21 @@ function seedRoom(input: {
   createdAt: string;
   expiresAt: string;
   endedAt?: string | null;
+  keepOpen?: boolean;
 }) {
   getDatabase()
     .prepare(
       `INSERT INTO sessions
-        (id, name, venue, host_account_id, host_key, revision, created_at, expires_at, ended_at)
-       VALUES (?, 'Room', '', 'host', ?, 0, ?, ?, ?)`,
+        (id, name, venue, host_account_id, host_key, revision, created_at,
+         expires_at, keep_open, ended_at)
+       VALUES (?, 'Room', '', 'host', ?, 0, ?, ?, ?, ?)`,
     )
     .run(
       input.id,
       `key-${input.id}`,
       input.createdAt,
       input.expiresAt,
+      input.keepOpen ? 1 : 0,
       input.endedAt ?? null,
     );
 }
@@ -186,6 +189,69 @@ describe("cleanup", () => {
           .get() as { ended_at: string | null }
       ).ended_at,
     ).toBe(now.toISOString());
+  });
+
+  it("leaves an opted-in room live after its normal expiry", async () => {
+    seedRoom({
+      id: "KEEPOP",
+      createdAt: ago(24 * 3),
+      expiresAt: ago(24 * 2),
+      keepOpen: true,
+    });
+
+    const summary = await runCleanup({ now });
+
+    expect(summary).toMatchObject({ closedRooms: 0, deletedRooms: 0 });
+    expect(
+      getDatabase()
+        .prepare("SELECT ended_at FROM sessions WHERE id = 'KEEPOP'")
+        .get(),
+    ).toEqual({ ended_at: null });
+  });
+
+  it("closes an opted-in room that has gone quiet for a month", async () => {
+    // Opened, played nothing since, voted on by nobody: the DJ who ticked the
+    // box is not coming back, and until it closes it holds its previews.
+    seedRoom({
+      id: "SILENT",
+      createdAt: ago(24 * 31),
+      expiresAt: ago(24 * 30),
+      keepOpen: true,
+    });
+
+    const summary = await runCleanup({ now });
+
+    expect(summary.closedRooms).toBe(1);
+    expect(
+      getDatabase()
+        .prepare("SELECT ended_at FROM sessions WHERE id = 'SILENT'")
+        .get(),
+    ).toEqual({ ended_at: now.toISOString() });
+  });
+
+  it("keeps an opted-in room that is old but still being voted in", async () => {
+    seedRoom({
+      id: "BUSY",
+      createdAt: ago(24 * 90),
+      expiresAt: ago(24 * 89),
+      keepOpen: true,
+    });
+    seedTrack({ id: "busy-track", sessionId: "BUSY" });
+    getDatabase()
+      .prepare(
+        `INSERT INTO votes (track_id, session_id, account_id, created_at)
+         VALUES ('busy-track', 'BUSY', 'host', ?)`,
+      )
+      .run(ago(2));
+
+    const summary = await runCleanup({ now });
+
+    expect(summary.closedRooms).toBe(0);
+    expect(
+      getDatabase()
+        .prepare("SELECT ended_at FROM sessions WHERE id = 'BUSY'")
+        .get(),
+    ).toEqual({ ended_at: null });
   });
 
   it("keeps an unattached upload inside the grace period", async () => {
