@@ -162,7 +162,7 @@ describe("room conditional requests", () => {
     const tag = first.headers.get("etag");
     expect(first.status).toBe(200);
     expect(tag).toBeTruthy();
-    expect(tag).toMatch(new RegExp(`^"${created.session.id}-v2-`));
+    expect(tag).toMatch(new RegExp(`^"${created.session.id}-v3-`));
 
     const repeated = await roomRequest(created.session.id, {
       token: host.token,

@@ -684,14 +684,15 @@ describe("queue interactions", () => {
     ).toHaveAttribute("aria-pressed", "false");
   });
 
-  it("reveals a tip action only for a saved pick", async () => {
+  it("keeps the tip action on saved picks after their active vote is spent", async () => {
     const user = userEvent.setup();
     const onTip = vi.fn();
     render(
       <QueueList
         tracks={tracks}
         interactive
-        votedTrackIds={new Set(["track-one", "track-two"])}
+        votedTrackIds={new Set()}
+        tipEligibleTrackIds={new Set(["track-one"])}
         onVote={vi.fn()}
         onTip={onTip}
       />,
@@ -701,11 +702,11 @@ describe("queue interactions", () => {
       name: "Open tip options for First Track by Artist A, row 1",
     });
     expect(
-      screen.getByRole("button", {
+      screen.queryByRole("button", {
         name: "Open tip options for Second Track by Artist B, row 2",
       }),
-    ).toBeInTheDocument();
-    expect(screen.getAllByText("Tip for this pick")).toHaveLength(2);
+    ).not.toBeInTheDocument();
+    expect(screen.getAllByText("Tip for this pick")).toHaveLength(1);
     await user.click(button);
     expect(onTip).toHaveBeenCalledWith(tracks[0]);
   });
@@ -1685,6 +1686,28 @@ describe("the crowd's now-playing card", () => {
     expect(
       within(dock).getByRole("button", { name: "Pause the DJ's song" }),
     ).toBeInTheDocument();
+  });
+
+  it("offers tipping from the live track card for a saved pick", async () => {
+    const user = userEvent.setup();
+    const room = nowPlayingRoom();
+    room.tipLinks = { cashApp: "https://cash.app/$DJOwl", venmo: null };
+    room.tipEligibleTrackIds = ["track-two"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: room })),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    const tip = await screen.findByRole("button", {
+      name: "Open tip options for now playing Second Track by Artist B",
+    });
+    await user.click(tip);
+
+    const dialog = screen.getByRole("dialog", { name: "Tip for this pick" });
+    expect(within(dialog).getByText("Second Track")).toBeInTheDocument();
+    expect(within(dialog).getByText("Artist B")).toBeInTheDocument();
   });
 
   it("goes quiet when the room has played past the preview", async () => {

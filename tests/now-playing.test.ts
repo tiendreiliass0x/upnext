@@ -381,7 +381,12 @@ describe("votes across a play", () => {
       toggleVote({ sessionId: session.id, trackId: opener, accountId: fan.id, enabled: true });
     }
     const before = getSession(session.id, fans[0].id)!;
-    expect(before).toMatchObject({ totalVotes: 3, guestCount: 3, votedTrackIds: [opener] });
+    expect(before).toMatchObject({
+      totalVotes: 3,
+      guestCount: 3,
+      votedTrackIds: [opener],
+      tipEligibleTrackIds: [opener],
+    });
 
     setNowPlaying({ sessionId: session.id, hostKey, accountId: host.id, trackId: opener });
 
@@ -391,6 +396,7 @@ describe("votes across a play", () => {
     // But the spent votes no longer rank the song or show as anyone's pick.
     expect(after.tracks.find((t) => t.id === opener)?.votes).toBe(0);
     expect(after.votedTrackIds).toEqual([]);
+    expect(after.tipEligibleTrackIds).toEqual([opener]);
   });
 
   it("lets an anonymous guest re-tap their free vote once the song is open again", () => {
@@ -412,6 +418,7 @@ describe("votes across a play", () => {
     expect(between.anonymousVoteUsed).toBe(true);
     // The spent tap is no longer shown as a live pick, so the guest can tap again.
     expect(between.votedTrackIds).toEqual([]);
+    expect(between.tipEligibleTrackIds).toEqual([opener]);
     const revision = between.revision;
 
     const again = castAnonymousVote({ sessionId: session.id, trackId: opener, voterId });

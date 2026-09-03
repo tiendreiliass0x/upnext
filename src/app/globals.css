@@ -1512,6 +1512,22 @@ button:active:not(:disabled) {
   transition: background-color 160ms ease;
 }
 
+.now-playing-card {
+  margin-bottom: 18px;
+  overflow: hidden;
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+}
+
+.now-playing-card .top-pick-player {
+  margin-bottom: 0;
+  border-radius: 0;
+}
+
+.now-playing-tip-button {
+  margin: 0 17px 17px;
+}
+
 .top-pick-player:hover:not(:disabled) {
   background: color-mix(in srgb, var(--surface-strong) 90%, var(--accent));
 }

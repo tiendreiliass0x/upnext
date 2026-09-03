@@ -2596,10 +2596,12 @@ function NowPlayingCard({
   nowPlaying,
   playback: { playing, status },
   onToggle,
+  onTip,
 }: {
   nowPlaying: NowPlaying;
   playback: PlaybackState;
   onToggle: () => void;
+  onTip?: () => void;
 }) {
   const { title, artist, previewUrl } = nowPlaying;
   // Nothing left to tap: no preview at all, or one the room has played past.
@@ -2611,45 +2613,57 @@ function NowPlayingCard({
 
   return (
     <>
-    <button
-      type="button"
-      className="top-pick top-pick-player"
-      aria-label={
-        !previewUrl
-          ? `${title} has no audio`
-          : status === "finished"
-            ? `${title} has finished`
-            : status === "failed"
-              ? `Retry ${title}`
-              : `${playing ? "Pause" : "Listen to"} ${title}`
-      }
-      disabled={Boolean(unplayable)}
-      onClick={onToggle}
-    >
-      <span className="top-pick-label">
-        <AudioLines size={19} /> Now playing
-      </span>
-      <span className="top-pick-copy">
-        <strong>{title}</strong>
-        <span>{artist}</span>
-      </span>
-      <span className="top-pick-listen" aria-hidden="true">
-        <NowPlayingWaveform playing={playing} />
-        <span>
-          {unplayable ||
-            (status === "failed"
-              ? "Tap to retry"
-              : playing
-                ? "Playing"
-                : "Tap to listen")}
-        </span>
-      </span>
-    </button>
-    {nowPlaying.source && (
-      <p className="top-pick-source">
-        <TrackAttribution source={nowPlaying.source} />
-      </p>
-    )}
+      <div className="now-playing-card">
+        <button
+          type="button"
+          className="top-pick top-pick-player"
+          aria-label={
+            !previewUrl
+              ? `${title} has no audio`
+              : status === "finished"
+                ? `${title} has finished`
+                : status === "failed"
+                  ? `Retry ${title}`
+                  : `${playing ? "Pause" : "Listen to"} ${title}`
+          }
+          disabled={Boolean(unplayable)}
+          onClick={onToggle}
+        >
+          <span className="top-pick-label">
+            <AudioLines size={19} /> Now playing
+          </span>
+          <span className="top-pick-copy">
+            <strong>{title}</strong>
+            <span>{artist}</span>
+          </span>
+          <span className="top-pick-listen" aria-hidden="true">
+            <NowPlayingWaveform playing={playing} />
+            <span>
+              {unplayable ||
+                (status === "failed"
+                  ? "Tap to retry"
+                  : playing
+                    ? "Playing"
+                    : "Tap to listen")}
+            </span>
+          </span>
+        </button>
+        {onTip && (
+          <button
+            type="button"
+            className="tip-pick-button now-playing-tip-button"
+            onClick={onTip}
+            aria-label={`Open tip options for now playing ${title} by ${artist}`}
+          >
+            <CircleDollarSign size={14} /> Tip for this pick
+          </button>
+        )}
+      </div>
+      {nowPlaying.source && (
+        <p className="top-pick-source">
+          <TrackAttribution source={nowPlaying.source} />
+        </p>
+      )}
     </>
   );
 }
@@ -2898,6 +2912,13 @@ function GuestRoom({
   const tippingEnabled = Boolean(
     session.tipLinks?.cashApp || session.tipLinks?.venmo,
   );
+  const tipEligibleTrackIds = new Set(
+    session.tipEligibleTrackIds ?? session.votedTrackIds,
+  );
+  const nowPlayingTrackId = session.nowPlaying?.trackId;
+  const nowPlayingTrack = nowPlayingTrackId
+    ? session.tracks.find((track) => track.id === nowPlayingTrackId)
+    : undefined;
   if (isLoading) return <LoadingRoom label="Joining the room" />;
 
   const topTrack = session.tracks.find((track) => track.cooldown === 0);
@@ -2936,6 +2957,13 @@ function GuestRoom({
           nowPlaying={session.nowPlaying}
           playback={playback}
           onToggle={() => playerRef.current?.toggle()}
+          onTip={
+            tippingEnabled &&
+            nowPlayingTrack &&
+            tipEligibleTrackIds.has(nowPlayingTrack.id)
+              ? () => setTipTrack(nowPlayingTrack)
+              : undefined
+          }
         />
       ) : topTrack ? (
         <section className="top-pick">
@@ -2973,6 +3001,7 @@ function GuestRoom({
             tracks={session.tracks}
             interactive={!isPreview}
             votedTrackIds={votedTrackIds}
+            tipEligibleTrackIds={tipEligibleTrackIds}
             pendingVotes={pendingVotes}
             lockSelectedVotes={isAnonymous}
             onVote={onVote}
@@ -3134,6 +3163,7 @@ type QueueListProps = {
   tracks: SessionTrack[];
   interactive?: boolean;
   votedTrackIds?: Set<string>;
+  tipEligibleTrackIds?: Set<string>;
   pendingVotes?: Set<string>;
   lockSelectedVotes?: boolean;
   onVote?: (trackId: string) => void;
@@ -3151,7 +3181,7 @@ type QueueListProps = {
    * hand the room back at its end.
    */
   onAuditionEnd?: () => void;
-  /** Revealed only after a vote is saved; tips never affect row ordering. */
+  /** Revealed for saved picks, including votes spent when a song started. */
   onTip?: (track: SessionTrack) => void;
   /**
    * When given, every row gets a Play that puts that song on the room. The
@@ -3193,6 +3223,7 @@ export function QueueList({
   tracks,
   interactive = false,
   votedTrackIds = new Set(),
+  tipEligibleTrackIds = new Set(),
   pendingVotes = new Set(),
   lockSelectedVotes = false,
   onVote,
@@ -3287,6 +3318,7 @@ export function QueueList({
     <ol className="queue-list">
       {tracks.map((track, index) => {
         const hasVote = votedTrackIds.has(track.id);
+        const canTip = tipEligibleTrackIds.has(track.id);
         const isPending = pendingVotes.has(track.id);
         const played = Boolean(track.playedAt);
         const onNow = track.id === nowPlayingTrackId;
@@ -3337,7 +3369,7 @@ export function QueueList({
               </small>
               <TrackAttribution source={track.source} />
               <VoterStack voters={track.voters} votes={track.votes} />
-              {interactive && hasVote && onTip && (
+              {interactive && canTip && onTip && (
                 <button
                   type="button"
                   className="tip-pick-button"

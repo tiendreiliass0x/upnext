@@ -76,6 +76,8 @@ export type PublicSession = {
   totalVotes: number;
   guestCount: number;
   votedTrackIds: string[];
+  /** Saved picks that may still be tipped after their vote was spent by a play. */
+  tipEligibleTrackIds?: string[];
   anonymousVoteUsed: boolean;
   nowPlaying: NowPlaying | null;
   /**
@@ -353,20 +355,27 @@ function getPublicSession(sessionId: string, accountId?: string) {
       guest_count: number;
     };
     const voters = getTrackVoters(session.id);
-    // Only votes cast since the track last played: an older one was spent by
-    // that play and the account is free to vote the song back up.
-    const votedTrackIds = accountId
+    const accountVotes = accountId
       ? (
           database
             .prepare(
-              `SELECT v.track_id FROM votes v
+              `SELECT v.track_id,
+                      v.created_at > COALESCE(t.played_at, '') AS live
+               FROM votes v
                JOIN tracks t ON t.id = v.track_id
-               WHERE v.session_id = ? AND v.account_id = ?
-                 AND v.created_at > COALESCE(t.played_at, '')`,
+               WHERE v.session_id = ? AND v.account_id = ?`,
             )
-            .all(session.id, accountId) as Array<{ track_id: string }>
-        ).map((vote) => vote.track_id)
+            .all(session.id, accountId) as Array<{
+              track_id: string;
+              live: number;
+            }>
+        )
       : [];
+    // Only votes cast since the track last played remain active. Older rows
+    // still prove that this guest made the pick and may open its tip action.
+    const votedTrackIds = accountVotes
+      .filter((vote) => vote.live)
+      .map((vote) => vote.track_id);
 
     const playing = session.now_playing_track_id
       ? tracks.find((track) => track.id === session.now_playing_track_id)
@@ -386,6 +395,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
       totalVotes: totals.total_votes,
       guestCount: totals.guest_count,
       votedTrackIds,
+      tipEligibleTrackIds: accountVotes.map((vote) => vote.track_id),
       anonymousVoteUsed: false,
       voters: getRoomVoters(session.id),
       nowPlaying:
@@ -596,6 +606,7 @@ export function getAnonymousSession(id: string, voterId: string) {
     // The free vote stays used once cast; it only shows as a live pick while
     // the song has not played since, so the guest can re-tap it afterwards.
     votedTrackIds: rows.filter((row) => row.live).map((row) => row.track_id),
+    tipEligibleTrackIds: rows.map((row) => row.track_id),
     anonymousVoteUsed: claimed || rows.length > 0,
   };
 }

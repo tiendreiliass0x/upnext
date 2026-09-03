@@ -13,11 +13,11 @@ export const dynamic = "force-dynamic";
 
 // Bump when the shape or meaning of PublicSession changes so a tag issued by
 // the previous deployment cannot answer 304 for a representation it lacked.
-const roomRepresentationVersion = 2;
+const roomRepresentationVersion = 3;
 
-// The room payload carries per-viewer fields (votedTrackIds, anonymousVoteUsed),
-// so the tag has to identify the viewer as well as the room revision. The viewer
-// is hashed to keep voter IDs out of a header that ends up in logs and proxies.
+// The room payload carries per-viewer vote and tip eligibility fields, so the
+// tag has to identify the viewer as well as the room revision. The viewer is
+// hashed to keep voter IDs out of a header that ends up in logs and proxies.
 function buildRoomTag(sessionId: string, revision: number, viewerKey: string) {
   const viewer = createHash("sha256")
     .update(viewerKey)
