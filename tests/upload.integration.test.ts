@@ -21,10 +21,12 @@ import { resetRateLimits } from "@/lib/rate-limit";
 import { GET as getPreview } from "@/app/api/tracks/[id]/preview/route";
 import { createAccount } from "@/lib/accounts";
 import {
+  claimUpload,
   createSession,
   endSession,
   getAudioUploadByRequest,
   registerAudioUpload,
+  releaseUpload,
   setNowPlaying,
 } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
@@ -189,6 +191,29 @@ describe("upload API", () => {
     );
     expect(ready.status).toBe(200);
     expect(await json(ready)).toEqual({ previewKey: completedBody.previewKey });
+  });
+
+  it("reports an upload another worker is writing", async () => {
+    const account = createAccount({
+      phone: "+32470000047",
+      pseudonym: "Curator",
+    });
+    // The claim is all this process knows: the POST holding the file is being
+    // served elsewhere, so the in-memory job map here is empty. Answering 404
+    // would tell the client to send its sixty megabytes again.
+    claimUpload(account.id, "elsewhere");
+
+    const processing = await getUploadStatus(
+      uploadStatusRequest(account.authToken, "elsewhere"),
+    );
+    expect(processing.status).toBe(202);
+    expect(await json(processing)).toEqual({ status: "processing" });
+
+    releaseUpload(account.id, "elsewhere");
+    const afterwards = await getUploadStatus(
+      uploadStatusRequest(account.authToken, "elsewhere"),
+    );
+    expect(afterwards.status).toBe(404);
   });
 
   it("rejects a file whose bytes are not audio, whatever its name says", async () => {

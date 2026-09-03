@@ -5,9 +5,12 @@ import { ListMusic, Plus, Trash2, Upload, X } from "lucide-react";
 import type { AccountStatus } from "@/lib/accounts";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import { fetchWithTimeout, readJson } from "@/lib/http-client";
+import {
+  accountTokenStorageKey,
+  adminTokenHeader,
+  adminTokenStorageKey,
+} from "@/lib/tokens";
 
-const adminTokenStorageKey = "upnext-admin-token";
-const accountTokenStorageKey = "upnext-account-token";
 
 function readStorage(key: string) {
   try {
@@ -120,7 +123,11 @@ export default function AdminLibraries() {
   const [isBusy, setIsBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const adminTokenRef = useRef("");
-  const accountLoadGenerationRef = useRef(0);
+  // Bumped whenever the credential changes. Every admin read captures it
+  // before its request and drops the response if it moved on, so an answer
+  // fetched under the previous token cannot repopulate a panel that has since
+  // been locked or pointed at a different one.
+  const loadGenerationRef = useRef(0);
 
   useEffect(() => {
     adminTokenRef.current = adminToken;
@@ -133,7 +140,7 @@ export default function AdminLibraries() {
 
   const authHeaders = useCallback(
     (extra: Record<string, string> = {}) => ({
-      "x-upnext-admin-token": adminToken,
+      [adminTokenHeader]: adminToken,
       ...(accountToken ? { Authorization: `Bearer ${accountToken}` } : {}),
       ...extra,
     }),
@@ -141,7 +148,8 @@ export default function AdminLibraries() {
   );
 
   const loadLibraries = useCallback(async () => {
-    if (!adminToken) return;
+    if (!adminToken || adminTokenRef.current !== adminToken) return;
+    const generation = loadGenerationRef.current;
     try {
       const response = await fetchWithTimeout("/api/libraries", {
         cache: "no-store",
@@ -157,12 +165,22 @@ export default function AdminLibraries() {
       if (!response.ok || !data.libraries) {
         throw new Error(data.error || "Libraries could not be loaded.");
       }
+      if (
+        loadGenerationRef.current !== generation ||
+        adminTokenRef.current !== adminToken
+      ) {
+        return;
+      }
       setLibraries(data.libraries);
       setSelectedId((current) => current || data.libraries?.[0]?.id || "");
       setError("");
     } catch (loadError) {
-      setLibraries([]);
-      setSelectedId("");
+      // The list on screen is the last one the server actually confirmed.
+      // Clearing it here would drop the operator's chosen library, and the
+      // next successful load re-selects the first shelf rather than theirs,
+      // sending files to a library they never picked. saveToken already
+      // clears both when the credential changes, which is the case where
+      // what is on screen really is untrustworthy.
       setError(errorMessage(loadError));
     }
   }, [adminToken, authHeaders]);
@@ -173,7 +191,7 @@ export default function AdminLibraries() {
 
   const loadAccounts = useCallback(async () => {
     if (!adminToken || adminTokenRef.current !== adminToken) return;
-    const generation = ++accountLoadGenerationRef.current;
+    const generation = loadGenerationRef.current;
     try {
       const response = await fetchWithTimeout("/api/admin/accounts", {
         cache: "no-store",
@@ -187,7 +205,7 @@ export default function AdminLibraries() {
         throw new Error(data.error || "Account status could not be loaded.");
       }
       if (
-        accountLoadGenerationRef.current !== generation ||
+        loadGenerationRef.current !== generation ||
         adminTokenRef.current !== adminToken
       ) {
         return;
@@ -195,7 +213,7 @@ export default function AdminLibraries() {
       setAccounts(data.accounts);
     } catch (loadError) {
       if (
-        accountLoadGenerationRef.current !== generation ||
+        loadGenerationRef.current !== generation ||
         adminTokenRef.current !== adminToken
       ) {
         return;
@@ -210,10 +228,11 @@ export default function AdminLibraries() {
   }, [loadAccounts]);
 
   const loadTracks = useCallback(async () => {
-    if (!adminToken || !selectedId) {
+    if (!adminToken || adminTokenRef.current !== adminToken || !selectedId) {
       setTracks([]);
       return;
     }
+    const generation = loadGenerationRef.current;
     try {
       const response = await fetchWithTimeout(
         `/api/libraries/${encodeURIComponent(selectedId)}/tracks`,
@@ -225,6 +244,12 @@ export default function AdminLibraries() {
       }>(response);
       if (!response.ok || !data.tracks) {
         throw new Error(data.error || "Songs could not be loaded.");
+      }
+      if (
+        loadGenerationRef.current !== generation ||
+        adminTokenRef.current !== adminToken
+      ) {
+        return;
       }
       setTracks(data.tracks);
     } catch (loadError) {
@@ -239,7 +264,7 @@ export default function AdminLibraries() {
   function saveToken(value: string) {
     const next = value.trim();
     adminTokenRef.current = next;
-    accountLoadGenerationRef.current += 1;
+    loadGenerationRef.current += 1;
     setAccounts([]);
     setLibraries([]);
     setSelectedId("");
@@ -327,16 +352,21 @@ export default function AdminLibraries() {
     // One bad file must not abandon the rest of the batch, or the operator
     // re-drops everything and re-uploads what already landed.
     const failures: string[] = [];
+    // Songs the shelf already held. Not failures, but not additions either,
+    // and an operator re-dropping a file to fix its title needs to be told
+    // the catalogue kept the old one.
+    const alreadyPresent: string[] = [];
     try {
       for (let index = 0; index < list.length; index += 1) {
         const file = list[index];
         try {
-          await uploadOne(file, (note) => {
+          const created = await uploadOne(file, (note) => {
             setStatus(
               `Creating preview ${index + 1} of ${list.length}` +
                 (note ? ` (${note})` : ""),
             );
           });
+          if (!created) alreadyPresent.push(file.name);
         } catch (fileError) {
           failures.push(`${file.name}: ${errorMessage(fileError)}`);
           if (fileError instanceof UploadStillProcessingError) {
@@ -354,8 +384,13 @@ export default function AdminLibraries() {
       // what failed. Silently dropping a file the operator watched fail is
       // worse than any of the failures.
       await Promise.all([loadTracks(), loadLibraries(), loadAccounts()]);
-      const added = list.length - failures.length;
-      setStatus(`Added ${added} song${added === 1 ? "" : "s"}.`);
+      const added = list.length - failures.length - alreadyPresent.length;
+      setStatus(
+        `Added ${added} song${added === 1 ? "" : "s"}.` +
+          (alreadyPresent.length > 0
+            ? ` ${alreadyPresent.length} already in this library, left as ${alreadyPresent.length === 1 ? "it was" : "they were"}: ${alreadyPresent.join(", ")}`
+            : ""),
+      );
       if (failures.length > 0) {
         setError(
           `${failures.length} of ${list.length} could not be added.\n${failures.join("\n")}`,
@@ -388,17 +423,20 @@ export default function AdminLibraries() {
   async function recoverUpload(
     uploadId: string,
     onProgress: (note: string) => void,
+    budget: { waited: number },
     initialWait = 0,
   ) {
-    let waited = 0;
     let wait = initialWait;
 
     while (true) {
       if (wait > 0) {
-        if (waited + wait > busyCeilingMs) {
+        // The budget belongs to the file, not to this call: sendUpload asks
+        // again on every attempt, and a fresh allowance each time would let
+        // one file hold the batch for several multiples of the ceiling.
+        if (budget.waited + wait > busyCeilingMs) {
           throw new UploadStillProcessingError();
         }
-        waited += wait;
+        budget.waited += wait;
         onProgress("server finishing upload");
         await pause(wait);
       }
@@ -420,10 +458,11 @@ export default function AdminLibraries() {
         return null;
       }
       if (response.ok && data.previewKey) return data.previewKey;
-      if (response.status === 404) return null;
-      if (response.status !== 202) {
-        throw new Error(data.error || "The upload status could not be checked.");
-      }
+      // Anything that is not "here it is" or "still working" says nothing
+      // about the upload, and this runs inside sendUpload's own catch: a
+      // throw here would escape the retry loop and replace the real upload
+      // error with a status-check one. Hand the retry back instead.
+      if (response.status !== 202) return null;
       wait = busyWaitMs(response) ?? defaultBusyWaitMs;
     }
   }
@@ -434,7 +473,9 @@ export default function AdminLibraries() {
     onProgress: (note: string) => void,
   ) {
     let lastError = "could not be processed.";
-    let busyWaited = 0;
+    // Shared with every recoverUpload call this file makes, so busyCeilingMs
+    // means what it says: the total a single file waits on a busy server.
+    const budget = { waited: 0 };
     let attempt = 1;
     while (attempt <= uploadAttempts) {
       onProgress(attempt > 1 ? `retry ${attempt - 1}` : "");
@@ -460,27 +501,30 @@ export default function AdminLibraries() {
         lastError = uploadData.error || lastError;
         if (uploaded.status === 429) {
           const wait = busyWaitMs(uploaded);
-          // A wait longer than the cap, or more waiting than one file is
-          // worth, is not the gate clearing: stop and report what the server
-          // said rather than holding the batch open indefinitely.
+          // A wait longer than the cap is not the gate clearing, it is the
+          // hourly limiter: stop and report what the server said.
           if (wait === null) break;
-          if (busyWaited + wait > busyCeilingMs) {
-            throw new UploadStillProcessingError();
-          }
-          busyWaited += wait;
-          const recovered = await recoverUpload(uploadId, onProgress, wait);
+          // Out of patience with a gate that is not ours. The 429 says only
+          // that the server is busy, and the two-at-a-time cap makes other
+          // accounts' uploads a normal reason for it, so this file fails with
+          // what the server said and the rest of the batch still gets its
+          // turn. Only recoverUpload throws UploadStillProcessingError, and
+          // only once the server has claimed this upload as in progress,
+          // which is the one case where the next file cannot get in either.
+          if (budget.waited + wait > busyCeilingMs) break;
+          const recovered = await recoverUpload(uploadId, onProgress, budget, wait);
           if (recovered) return recovered;
           continue;
         }
         if (!isRetryableStatus(uploaded.status)) break;
-        const recovered = await recoverUpload(uploadId, onProgress);
+        const recovered = await recoverUpload(uploadId, onProgress, budget);
         if (recovered) return recovered;
       } catch (requestError) {
         if (requestError instanceof UploadStillProcessingError) {
           throw requestError;
         }
         lastError = errorMessage(requestError);
-        const recovered = await recoverUpload(uploadId, onProgress);
+        const recovered = await recoverUpload(uploadId, onProgress, budget);
         if (recovered) return recovered;
       }
       if (attempt < uploadAttempts) await pause(attempt * 1000);
@@ -526,8 +570,11 @@ export default function AdminLibraries() {
         continue;
       }
 
-      const data = await readJson<{ error?: string }>(added);
-      if (added.ok) return;
+      const data = await readJson<{ created?: boolean; error?: string }>(added);
+      // 200 means the shelf already held this audio, so the row on it is
+      // whatever it was called the first time. Reporting that as added would
+      // tell the operator their corrected title landed when it did not.
+      if (added.ok) return data.created !== false;
       lastError = data.error || lastError;
       if (!isRetryableStatus(added.status)) throw new Error(lastError);
       if (attempt < uploadAttempts) await pause(attempt * 1000);

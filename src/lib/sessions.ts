@@ -1033,6 +1033,44 @@ export function getAudioUploadByRequest(accountId: string, requestId: string) {
 }
 
 /**
+ * How long a claim is believed. Past this it is taken as the residue of a
+ * process that died mid-write rather than an upload still running: the POST
+ * itself gives up at five minutes, so anything older answers nothing useful
+ * and would only keep a client waiting on a request nobody is serving.
+ */
+const uploadClaimTtlMs = 10 * 60_000;
+
+/** Mark this account's upload as in progress, for any worker to read. */
+export function claimUpload(accountId: string, requestId: string) {
+  getDatabase()
+    .prepare(
+      `INSERT INTO upload_claims (account_id, request_id, claimed_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(account_id, request_id)
+       DO UPDATE SET claimed_at = excluded.claimed_at`,
+    )
+    .run(accountId, requestId, new Date().toISOString());
+}
+
+export function releaseUpload(accountId: string, requestId: string) {
+  getDatabase()
+    .prepare("DELETE FROM upload_claims WHERE account_id = ? AND request_id = ?")
+    .run(accountId, requestId);
+}
+
+/** Whether some worker is writing this upload right now. */
+export function isUploadInProgress(accountId: string, requestId: string) {
+  const fresh = new Date(Date.now() - uploadClaimTtlMs).toISOString();
+  const row = getDatabase()
+    .prepare(
+      `SELECT 1 FROM upload_claims
+       WHERE account_id = ? AND request_id = ? AND claimed_at > ?`,
+    )
+    .get(accountId, requestId, fresh);
+  return Boolean(row);
+}
+
+/**
  * Audio for a room track is served to whoever is in the room: the crowd votes
  * with their ears, so a guest may pre-listen to any row on the ballot, not
  * only the song on air. The room link is the capability — a track id is only

@@ -75,4 +75,36 @@ describe("admin account status", () => {
       activeRoomCount: 1,
     });
   });
+
+  it("does not call a preview a room is using an orphan", async () => {
+    process.env.ADMIN_TOKEN = "super-admin";
+    const account = createAccount({
+      phone: "+32470006002",
+      pseudonym: "Booth DJ",
+    });
+    registerAudioUpload({
+      objectKey: "audio/booth/room-song.mp3",
+      accountId: account.id,
+      originalName: "room-song.mp3",
+      sizeBytes: 40,
+    });
+    // The ordinary booth flow: uploaded for a room, never catalogued. Cleanup
+    // treats a track reference as a live claim on the object, and so must the
+    // warning, or every DJ who never touches the catalogue reads as a leak.
+    createSession({
+      name: "Live room",
+      venue: "",
+      accountId: account.id,
+      tracks: [
+        { title: "Room Song", artist: "A", previewKey: "audio/booth/room-song.mp3" },
+      ],
+    });
+
+    const response = await listAccountStatus(request("super-admin"));
+    const data = (await response.json()) as {
+      accounts: Array<Record<string, unknown>>;
+    };
+    const row = data.accounts.find((entry) => entry.id === account.id);
+    expect(row).toMatchObject({ uploadCount: 1, uploadsNotInLibrary: 0 });
+  });
 });

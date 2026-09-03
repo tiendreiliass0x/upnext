@@ -2898,11 +2898,29 @@ button:active:not(:disabled) {
 .play-notice {
   margin: 0 0 12px;
   padding: 9px 11px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   border-radius: 10px;
   background: color-mix(in srgb, var(--accent) 35%, transparent);
   color: var(--accent-ink);
   font-size: 12px;
   font-weight: 650;
+}
+
+.play-notice span {
+  flex: 1;
+  min-width: 0;
+}
+
+.play-notice button {
+  flex: none;
+  display: inline-flex;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
 }
 
 .play-rows {

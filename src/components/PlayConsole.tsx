@@ -17,9 +17,12 @@ import {
 import { readJson } from "@/lib/http-client";
 import type { CatalogueTrack, Library, LibraryTrack } from "@/lib/libraries";
 import type { Playlist, PlaylistTrack } from "@/lib/playlists";
+import {
+  accountTokenStorageKey,
+  adminTokenHeader,
+  adminTokenStorageKey,
+} from "@/lib/tokens";
 
-const accountTokenStorageKey = "upnext-account-token";
-const adminTokenStorageKey = "upnext-admin-token";
 
 type Row = CatalogueTrack | PlaylistTrack;
 type View =
@@ -77,7 +80,7 @@ export default function PlayConsole() {
   const authHeaders = useCallback(
     () => ({
       Authorization: `Bearer ${token ?? ""}`,
-      ...(adminToken ? { "x-upnext-admin-token": adminToken } : {}),
+      ...(adminToken ? { [adminTokenHeader]: adminToken } : {}),
     }),
     [adminToken, token],
   );
@@ -594,7 +597,21 @@ export default function PlayConsole() {
             )}
           </div>
 
-          {notice && <p className="play-notice" role="status">{notice}</p>}
+          {notice && (
+            <p className="play-notice" role="status">
+              <span>{notice}</span>
+              {/* Only changeView clears this, and the view it is set from is
+                  the one the reader is already on: without a way out it sits
+                  over the page through every play, search and scroll. */}
+              <button
+                type="button"
+                onClick={() => setNotice("")}
+                aria-label="Dismiss"
+              >
+                <X size={16} />
+              </button>
+            </p>
+          )}
 
           {rows.length === 0 ? (
             <p className="library-empty">

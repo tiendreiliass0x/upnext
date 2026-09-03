@@ -68,7 +68,13 @@ export async function POST(
         { status: 400 },
       );
     }
-    return NextResponse.json({ track: result }, { status: 201 });
+    // 200 for a song that was already on this shelf: the caller counts what
+    // it added, and a 201 for an untouched row makes that count a fiction.
+    const { created, ...track } = result;
+    return NextResponse.json(
+      { track, created },
+      { status: created ? 201 : 200 },
+    );
   } catch {
     return NextResponse.json(
       { error: "The song could not be added." },

@@ -25,6 +25,15 @@ export async function POST(
     if (!trackId && !libraryId) {
       return NextResponse.json({ error: "A track is required." }, { status: 400 });
     }
+    // Both is not a request this route can honour: libraryId would win and the
+    // named track would be dropped under a 201 reporting how many were added.
+    // Say so rather than doing something the caller did not ask for.
+    if (trackId && libraryId) {
+      return NextResponse.json(
+        { error: "Send either a track or a library, not both." },
+        { status: 400 },
+      );
+    }
     const bypassLimit = isAdminRequest(request);
 
     if (libraryId) {

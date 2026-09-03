@@ -1,5 +1,5 @@
 import { getDatabase } from "@/lib/db";
-import type { LibraryTrack } from "@/lib/libraries";
+import { adminListingLimit, type LibraryTrack } from "@/lib/libraries";
 
 export type Playlist = {
   id: string;
@@ -50,7 +50,10 @@ export function listPlaylists(
          ORDER BY p.created_at DESC
          LIMIT ?`,
       )
-      .all(accountId, options.unbounded ? -1 : maximumPlaylistsPerAccount) as PlaylistRow[]
+      .all(
+        accountId,
+        options.unbounded ? adminListingLimit : maximumPlaylistsPerAccount,
+      ) as PlaylistRow[]
   ).map(toPlaylist);
 }
 
@@ -122,7 +125,11 @@ export function listPlaylistTracks(
        ORDER BY pt.position ASC
        LIMIT ?`,
     )
-    .all(accountId, id, options.unbounded ? -1 : maximumPlaylistTracks) as Array<{
+    .all(
+      accountId,
+      id,
+      options.unbounded ? adminListingLimit : maximumPlaylistTracks,
+    ) as Array<{
     id: string;
     library_id: string;
     title: string;

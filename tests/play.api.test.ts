@@ -12,7 +12,11 @@ import { DELETE as removeTrackRoute } from "@/app/api/playlists/[id]/tracks/[tra
 import { GET as previewRoute } from "@/app/api/library-tracks/[id]/preview/route";
 import { adminTokenHeader } from "@/lib/admin";
 import { addLibraryTrack, createLibrary } from "@/lib/libraries";
-import { createPlaylist, maximumPlaylistsPerAccount } from "@/lib/playlists";
+import {
+  createPlaylist,
+  listPlaylistTracks,
+  maximumPlaylistsPerAccount,
+} from "@/lib/playlists";
 import { registerAudioUpload } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
@@ -171,6 +175,28 @@ describe("play API", () => {
 
     expect(added.status).toBe(201);
     expect(await body(added)).toEqual({ added: 2, full: false });
+  });
+
+  it("refuses a body that names both a track and a library", async () => {
+    const account = await dj("+32470004009");
+    const library = createLibrary({ name: "L", description: "" });
+    const created = await playlist(account.token);
+    const song = catalogueSong(library.id, "Only This One");
+
+    // libraryId would win and the named track would be dropped under a 201
+    // reporting a count, so neither half of the request is safe to guess at.
+    const response = await addTrackRoute(
+      req(`http://localhost/api/playlists/${created.id}/tracks`, {
+        method: "POST",
+        token: account.token,
+        body: { trackId: song.id, libraryId: library.id },
+      }),
+      ctx({ id: created.id }),
+    );
+
+    expect(response.status).toBe(400);
+    // Nothing was added under either interpretation.
+    expect(listPlaylistTracks(account.account.id, created.id)).toHaveLength(0);
   });
 
   it("hands the player a signed URL as JSON, since audio cannot send a bearer header", async () => {

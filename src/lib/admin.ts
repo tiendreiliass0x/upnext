@@ -1,6 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
 
-export const adminTokenHeader = "x-upnext-admin-token";
+import { adminTokenHeader } from "@/lib/tokens";
+
+export { adminTokenHeader };
 
 /**
  * The admin surface is deliberately not built on phone accounts. Phone login is

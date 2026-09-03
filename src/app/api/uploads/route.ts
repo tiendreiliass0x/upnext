@@ -6,9 +6,12 @@ import { getAccountFromRequest } from "@/lib/auth";
 import { deletePreview, uploadPreview } from "@/lib/r2";
 import { rateLimitedResponse, takeRateLimit } from "@/lib/rate-limit";
 import {
+  claimUpload,
   getAccountStorageBytes,
   getAudioUploadByRequest,
+  isUploadInProgress,
   registerAudioUpload,
+  releaseUpload,
 } from "@/lib/sessions";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +30,11 @@ export const accountStorageQuota =
   Math.max(1, Number(process.env.UPLOAD_QUOTA_MB) || 1024) * 1024 * 1024;
 // Uploads per account per hour: generous for a set, far too few for a script.
 const uploadRateLimit = { limit: 60, windowMs: 60 * 60 * 1000 };
+// Status checks per account per minute. A batch polls this every five seconds
+// per file, so this is many times what an honest client needs; what it stops
+// is the endpoint being the one free way to spin the database handle, which
+// is the reason the POST beside it counts at all.
+const uploadStatusRateLimit = { limit: 120, windowMs: 60 * 1000 };
 // What a client is told to wait when another upload holds the gate. Short,
 // because it is a poll interval rather than a penalty: the caller is normally
 // waiting on its own previous file to finish.
@@ -48,10 +56,20 @@ export async function GET(request: Request) {
   if (!requestId || requestId.length > 100) {
     return NextResponse.json({ error: "An upload ID is required." }, { status: 400 });
   }
+  const statusRetryAfter = takeRateLimit(
+    "upload-status",
+    account.id,
+    uploadStatusRateLimit,
+  );
+  if (statusRetryAfter !== null) return rateLimitedResponse(statusRetryAfter);
 
   const previewKey = getAudioUploadByRequest(account.id, requestId);
   if (previewKey) return NextResponse.json({ previewKey });
-  if (activeAudioJobs.get(account.id) === requestId) {
+  // Read from the database rather than from this worker's own memory: the
+  // client asking is not necessarily talking to the worker doing the writing,
+  // and answering "never heard of it" there is what sends a whole file back
+  // up the wire.
+  if (isUploadInProgress(account.id, requestId)) {
     return NextResponse.json(
       { status: "processing" },
       {
@@ -116,6 +134,7 @@ export async function POST(request: Request) {
   let uploadedObjectKey = "";
   const activeJobId = requestId || crypto.randomUUID();
   activeAudioJobs.set(account.id, activeJobId);
+  claimUpload(account.id, activeJobId);
   try {
     const formData = await request.formData();
     const file = formData.get("file");
@@ -150,15 +169,20 @@ export async function POST(request: Request) {
         { status: 415 },
       );
     }
-    const usedBytes = getAccountStorageBytes(account.id);
-    if (!admin && usedBytes + file.size > accountStorageQuota) {
-      const quotaMb = Math.round(accountStorageQuota / (1024 * 1024));
-      return NextResponse.json(
-        {
-          error: `Your storage is full (${quotaMb} MB). Remove songs from your libraries or end old rooms to free space.`,
-        },
-        { status: 507 },
-      );
+    // Inside the guard, not before it: the aggregate scans the account's whole
+    // upload history, and a bulk admin import pays for it once per file to
+    // throw the answer away.
+    if (!admin) {
+      const usedBytes = getAccountStorageBytes(account.id);
+      if (usedBytes + file.size > accountStorageQuota) {
+        const quotaMb = Math.round(accountStorageQuota / (1024 * 1024));
+        return NextResponse.json(
+          {
+            error: `Your storage is full (${quotaMb} MB). Remove songs from your libraries or end old rooms to free space.`,
+          },
+          { status: 507 },
+        );
+      }
     }
     uploadedObjectKey = `audio/${account.id}/${crypto.randomUUID()}.${format.extension}`;
     await uploadPreview(
@@ -199,5 +223,6 @@ export async function POST(request: Request) {
     if (activeAudioJobs.get(account.id) === activeJobId) {
       activeAudioJobs.delete(account.id);
     }
+    releaseUpload(account.id, activeJobId);
   }
 }

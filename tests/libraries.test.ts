@@ -142,6 +142,36 @@ describe("libraries", () => {
     deleteLibraryTrack(track.id);
     expect(getLibraryTrackPreviewKey(track.id)).toBeNull();
   });
+
+  it("says when a re-add found the song already on the shelf", () => {
+    const owner = account("+32470001003");
+    const library = createLibrary({ name: "L", description: "" });
+    const key = upload("previews/owner/dup.mp3", owner.id);
+    const first = addLibraryTrack({
+      libraryId: library.id,
+      title: "Typo Titel",
+      artist: "A",
+      previewKey: key,
+      contributedBy: owner.id,
+    });
+    if (typeof first !== "object" || first === null) throw new Error("not added");
+    expect(first.created).toBe(true);
+
+    // The same audio offered again under a corrected title. The row that is
+    // already there wins, and the caller has to be told so rather than
+    // reporting an edit the catalogue never made.
+    const again = addLibraryTrack({
+      libraryId: library.id,
+      title: "Correct Title",
+      artist: "A",
+      previewKey: key,
+      contributedBy: owner.id,
+    });
+    if (typeof again !== "object" || again === null) throw new Error("not added");
+    expect(again.created).toBe(false);
+    expect(again.id).toBe(first.id);
+    expect(again.title).toBe("Typo Titel");
+  });
 });
 
 describe("library previews are usable across accounts", () => {
