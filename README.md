@@ -340,9 +340,13 @@ once it goes live, and are remembered only in the DJ's browser to prefill the
 next setup. The server accepts handles rather than arbitrary URLs and builds
 the providers' public HTTPS links itself.
 
-After a guest's vote is saved, that row offers **Tip for this pick**. It
-opens a sheet with the song and a copyable room reference, then hands the guest
-to Cash App or Venmo in a new tab. UP/NEXT does not verify who owns the
+The song the DJ has on offers **Tip for this pick** on its card, to anyone in
+the room and whatever they voted for. A guest's own saved picks carry the same
+button on their ballot rows, and keep it after a play has spent the vote that
+made them — the song on now is left to the card rather than offered twice. A DJ
+reading their own room from the crowd's side is not offered it at all. The
+button opens a sheet with the song and a copyable room reference, then hands the
+guest to Cash App or Venmo in a new tab. UP/NEXT does not verify who owns the
 DJ-provided profiles, so the sheet tells guests to confirm the recipient before
 sending. It also does not receive payment status, store amounts, take a fee, or
 claim that a tip was completed. A tip never changes votes, queue order,
