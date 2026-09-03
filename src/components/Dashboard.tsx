@@ -63,7 +63,11 @@ import SourcePicker from "@/components/SourcePicker";
 import { tipHandleError } from "@/lib/tips";
 import type { NowPlaying, TrackSource } from "@/lib/sessions";
 import type { PublicSession, SessionTrack, TrackVoter } from "@/lib/sessions";
-import { accountTokenStorageKey } from "@/lib/tokens";
+import {
+  accountTokenStorageKey,
+  adminTokenHeader,
+  adminTokenStorageKey,
+} from "@/lib/tokens";
 
 type AppView = "dj" | "guest";
 
@@ -71,6 +75,20 @@ const accountRequestStorageKey = "upnext-account-request-id";
 const voterIdStorageKey = "upnext-voter-id";
 const anonymousVotesStorageKey = "upnext-anonymous-votes";
 const tipHandlesStorageKey = "upnext-tip-handles";
+
+export function sessionUploadHeaders(accountToken: string, uploadId: string) {
+  let adminToken = "";
+  try {
+    adminToken = window.localStorage.getItem(adminTokenStorageKey)?.trim() ?? "";
+  } catch {
+    // Account uploads remain available when browser storage is blocked.
+  }
+  return {
+    Authorization: `Bearer ${accountToken}`,
+    "x-upnext-upload-id": uploadId,
+    ...(adminToken ? { [adminTokenHeader]: adminToken } : {}),
+  };
+}
 
 type DraftTrack = {
   id: string;
@@ -1263,10 +1281,7 @@ export default function Dashboard({
           "/api/uploads",
           {
             method: "POST",
-            headers: {
-              Authorization: `Bearer ${accountToken}`,
-              "x-upnext-upload-id": track.id,
-            },
+            headers: sessionUploadHeaders(accountToken, track.id),
             body: formData,
           },
           5 * 60_000,
