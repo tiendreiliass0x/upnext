@@ -144,7 +144,20 @@ button:active:not(:disabled) {
   background: var(--surface);
 }
 
-.profile-chip > span {
+/* The chip opens the profile, so it is a button; it keeps the chip's shape
+   and only gains the affordances of one. */
+.profile-chip.is-editable {
+  cursor: pointer;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.profile-chip.is-editable:hover {
+  border-color: var(--muted);
+  background: var(--surface-raised);
+}
+
+.profile-chip > span,
+.profile-chip-face {
   width: 30px;
   height: 30px;
   display: grid;
@@ -648,6 +661,27 @@ button:active:not(:disabled) {
 
 .voter-face + .voter-face {
   margin-left: -6px;
+}
+
+/* A face with a picture keeps the size and the ring its lettered version
+   had; only the fill changes. One rule for every stack, so the header, a
+   row's votes and the room's crowd never drift apart. */
+.profile-chip-face.has-picture,
+.voter-face.has-picture,
+.guest-host-face.has-picture,
+.profile-picture-face.has-picture {
+  overflow: hidden;
+  background: var(--line);
+}
+
+.profile-chip-face img,
+.voter-face img,
+.guest-host-face img,
+.profile-picture-face img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .voter-face.is-anonymous {
@@ -1285,6 +1319,146 @@ button:active:not(:disabled) {
 .tip-sheet-track span {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* The profile sheet reuses the tip sheet's shell — same portal, same trap,
+   same shape — and only adds the picture row and the form under it. */
+.profile-sheet .profile-picture {
+  margin-top: 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.profile-picture-face {
+  width: 72px;
+  height: 72px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: hsl(var(--face-hue, 0) 62% 44%);
+  color: #fff;
+  font-size: 28px;
+  font-weight: 850;
+}
+
+.profile-picture-face.is-anonymous {
+  background: color-mix(in srgb, var(--muted) 55%, var(--surface));
+  color: var(--ink);
+}
+
+.profile-picture-actions {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+/* The file input is a label wearing a button's clothes, like the upload
+   zone: the control itself is unstyleable, so it is taken out of the flow
+   rather than hidden, which would take it out of the tab order too. */
+.profile-picture-actions label {
+  min-height: 42px;
+  position: relative;
+}
+
+/* The input itself is one transparent pixel, so the outline the browser
+   draws on it cannot be seen. The label it hides behind wears the focus. */
+.profile-picture-actions label:focus-within {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.profile-picture-actions label.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.profile-picture-actions input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.profile-picture-actions .link-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.profile-picture-actions small {
+  flex-basis: 100%;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.profile-form {
+  margin-top: 22px;
+  display: grid;
+  gap: 16px;
+}
+
+.profile-phone {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Always present so a save does not shift the button under the reader's
+   finger; empty until there is something to say. */
+.profile-notice {
+  margin: 0;
+  min-height: 16px;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Who is spinning, under the room's title. */
+.guest-host {
+  margin: 12px 0 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.guest-host > span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.guest-host strong {
+  font-size: 13px;
+}
+
+.guest-host small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.guest-host-face {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: hsl(var(--face-hue, 0) 62% 44%);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.guest-host-face.is-anonymous {
+  background: color-mix(in srgb, var(--muted) 55%, var(--surface));
+  color: var(--ink);
 }
 
 .tip-reference {

@@ -5,7 +5,7 @@ import {
   getAccountByToken,
   normalizePhone,
   toPublicAccount,
-  updateAccountPseudonym,
+  updateAccountProfile,
 } from "@/lib/accounts";
 import { getAccountFromRequest } from "@/lib/auth";
 import { createSession, getSession, toggleVote } from "@/lib/sessions";
@@ -33,6 +33,8 @@ describe("accounts", () => {
       id: account.id,
       pseudonym: "Night Owl",
       phoneLast4: "3456",
+      avatarUrl: null,
+      tagline: "",
     });
     expect(toPublicAccount(account)).not.toHaveProperty("authToken");
     expect(toPublicAccount(account)).not.toHaveProperty("phone");
@@ -43,7 +45,7 @@ describe("accounts", () => {
       phone: "+32470987654",
       pseudonym: "Old Name",
     });
-    const updated = updateAccountPseudonym(account, "Mint Fox");
+    const updated = updateAccountProfile(account, { pseudonym: "Mint Fox" });
 
     expect(updated.authToken).toBe(account.authToken);
     expect(getAccountByToken(account.authToken)?.pseudonym).toBe("Mint Fox");
@@ -73,6 +75,49 @@ describe("accounts", () => {
   });
 });
 
+describe("editing one field at a time", () => {
+  it("writes only the field it was given, so two edits cannot undo each other", () => {
+    const account = createAccount({
+      phone: "+32470123401",
+      pseudonym: "Original",
+    });
+
+    // Two requests that both read this snapshot and change different fields.
+    // A write that filled the untouched column in from the snapshot would
+    // carry the other one's pre-edit value back over the top of it.
+    updateAccountProfile(account, { pseudonym: "Renamed" });
+    updateAccountProfile(account, { tagline: "Vinyl only" });
+
+    const stored = getAccountByToken(account.authToken)!;
+    expect(stored.pseudonym).toBe("Renamed");
+    expect(stored.tagline).toBe("Vinyl only");
+  });
+
+  it("does not write when nothing actually changed", () => {
+    const account = createAccount({
+      phone: "+32470123402",
+      pseudonym: "Steady",
+    });
+    const { session } = createSession({
+      name: "Set",
+      venue: "",
+      accountId: account.id,
+      requestId: crypto.randomUUID(),
+      tracks: [{ title: "Opener", artist: "A" }],
+    });
+    const before = getSession(session.id)!.revision;
+
+    // An empty edit, and one that resubmits what is already stored. Writing
+    // for either would bump every room this account is visible in, which a
+    // caller could repeat to defeat the room's 304 polling.
+    updateAccountProfile(account, {});
+    updateAccountProfile(account, { pseudonym: "Steady", tagline: "" });
+    updateAccountProfile(account, { pseudonym: "  Steady  " });
+
+    expect(getSession(session.id)!.revision).toBe(before);
+  });
+});
+
 describe("renaming while in a room", () => {
   it("refreshes the station name in rooms the account hosts", () => {
     const host = createAccount({ phone: "+32470005000", pseudonym: "Old DJ" });
@@ -85,7 +130,7 @@ describe("renaming while in a room", () => {
     });
     const before = getSession(created.session.id)!;
 
-    updateAccountPseudonym(host, "New DJ");
+    updateAccountProfile(host, { pseudonym: "New DJ" });
 
     const after = getSession(created.session.id)!;
     expect(after.djName).toBe("New DJ");
@@ -114,15 +159,19 @@ describe("renaming while in a room", () => {
     });
     const before = getSession(votedIn.session.id)!;
     const untouchedBefore = getSession(notVotedIn.session.id)!.revision;
-    expect(before.tracks[0].voters).toEqual([{ name: "Old Name" }]);
+    expect(before.tracks[0].voters).toEqual([
+      { name: "Old Name", avatarUrl: null },
+    ]);
 
-    updateAccountPseudonym(fan, "New Name");
+    updateAccountProfile(fan, { pseudonym: "New Name" });
 
     const after = getSession(votedIn.session.id)!;
     // A guest polling with the old ETag now gets a body instead of a 304.
     expect(after.revision).toBe(before.revision + 1);
-    expect(after.tracks[0].voters).toEqual([{ name: "New Name" }]);
-    expect(after.voters).toEqual([{ name: "New Name" }]);
+    expect(after.tracks[0].voters).toEqual([
+      { name: "New Name", avatarUrl: null },
+    ]);
+    expect(after.voters).toEqual([{ name: "New Name", avatarUrl: null }]);
     // Rooms the account never voted in are left alone.
     expect(getSession(notVotedIn.session.id)!.revision).toBe(untouchedBefore);
   });
