@@ -493,6 +493,19 @@ describe("library picker", () => {
     expect(picked[0].libraryPreviewKey).toBe("previews/curator/sunrise.mp3");
   });
 
+  it("adds the entire in-house library without individual picks", async () => {
+    mockApi();
+    const onAdd = vi.fn();
+    render(<LibraryPicker accountToken="t" onAdd={onAdd} />);
+
+    await screen.findByRole("checkbox", { name: /sunrise/i });
+    await userEvent.click(
+      screen.getByRole("button", { name: "Add entire library" }),
+    );
+
+    await waitFor(() => expect(onAdd).toHaveBeenCalledWith(libraryTracks));
+  });
+
   it("marks a catalogue entry that has no preview", async () => {
     mockApi();
     render(<LibraryPicker accountToken="t" onAdd={() => {}} />);
@@ -796,7 +809,7 @@ describe("tip handles in the setup form", () => {
     ).toBeInTheDocument();
     // Nothing to launch into: the room would refuse this handle, so the DJ is
     // not sent through an upload to be told so.
-    expect(screen.getByRole("button", { name: /start session/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Start session" })).toBeDisabled();
     expect(screen.queryByText("Crowd tips enabled")).not.toBeInTheDocument();
   });
 
@@ -810,6 +823,26 @@ describe("tip handles in the setup form", () => {
       screen.queryByText(/cashtag that starts with a letter/i),
     ).not.toBeInTheDocument();
     expect(screen.getByText("Crowd tips enabled")).toBeInTheDocument();
+  });
+
+  it("keeps payment details and the start action ahead of the track state", async () => {
+    const { field } = await typeCashtag("$DJOwl");
+    const uploader = screen.getByText("Choose files").closest("label");
+    const start = screen.getByRole("button", { name: "Start session" });
+    const trackState = document.querySelector(".empty-tracks");
+
+    expect(uploader).not.toBeNull();
+    expect(trackState).not.toBeNull();
+    expect(screen.queryByRole("button", { name: "Restore demo" })).toBeNull();
+    expect(
+      uploader?.compareDocumentPosition(field) ?? 0,
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(field.compareDocumentPosition(start)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(start.compareDocumentPosition(trackState as Node)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 });
 
@@ -953,7 +986,35 @@ describe("external tips", () => {
             account: { id: "host", pseudonym: "DJ Owl", phoneLast4: "1234" },
           });
         }
-        if (url === "/api/libraries") return Response.json({ libraries: [] });
+        if (url === "/api/libraries") {
+          return Response.json({
+            libraries: [
+              {
+                id: "lib-1",
+                name: "House picks",
+                description: "",
+                trackCount: 1,
+                createdAt: "",
+              },
+            ],
+          });
+        }
+        if (url.startsWith("/api/libraries/lib-1/tracks")) {
+          return Response.json({
+            tracks: [
+              {
+                id: "lt-1",
+                libraryId: "lib-1",
+                title: "Sunrise",
+                artist: "Kora",
+                previewUrl: "/api/library-tracks/lt-1/preview",
+                libraryPreviewKey: "previews/curator/sunrise.mp3",
+                contributedBy: null,
+                createdAt: "",
+              },
+            ],
+          });
+        }
         if (url === "/api/sessions" && init?.method === "POST") {
           creationBody = JSON.parse(String(init.body)) as Record<string, unknown>;
           return Response.json(
@@ -973,6 +1034,9 @@ describe("external tips", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<Dashboard />);
 
+    await user.click(
+      await screen.findByRole("button", { name: "Add entire library" }),
+    );
     const cashApp = await screen.findByLabelText(/Cash App/i);
     const venmo = screen.getByLabelText(/Venmo/i);
     await user.type(cashApp, "$DJOwl");
@@ -1098,7 +1162,7 @@ describe("starting a room from a playlist", () => {
     expect(roomCreations).toHaveLength(0);
   });
 
-  it("keeps the demo draft and explains when the playlist is not the DJ's", async () => {
+  it("keeps an empty draft and explains when the playlist is not the DJ's", async () => {
     mountWithPlaylist(() =>
       Response.json({ error: "That playlist could not be found." }, { status: 404 }),
     );
@@ -1106,6 +1170,7 @@ describe("starting a room from a playlist", () => {
       await screen.findByText("That playlist could not be found.", {}, { timeout: 3000 }),
     ).toBeInTheDocument();
     expect(screen.getByDisplayValue("Friday After Dark")).toBeInTheDocument();
+    expect(screen.getByText("Your set is empty")).toBeInTheDocument();
   });
 });
 

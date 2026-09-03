@@ -65,6 +65,7 @@ export default function SourcePicker({
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
+  const [isAddingPlaylist, setIsAddingPlaylist] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [pickerError, setPickerError] = useState("");
   const pollRef = useRef<number | null>(null);
@@ -276,6 +277,36 @@ export default function SourcePicker({
     }
   }
 
+  async function addEntirePlaylist() {
+    if (!connected || !playlistId || isAddingPlaylist) return;
+    setIsAddingPlaylist(true);
+    setPickerError("");
+    try {
+      // Reload without the current search so "entire" always means the chosen
+      // playlist, not only the rows left visible by a search.
+      const response = await fetchWithTimeout(
+        `/api/connections/${connected.provider}/playlists/${encodeURIComponent(playlistId)}/tracks?q=`,
+        { cache: "no-store", headers: authHeaders() },
+      );
+      const data = await readJson<{ tracks?: ProviderTrack[]; error?: string }>(
+        response,
+      );
+      if (!response.ok || !data.tracks) {
+        throw new Error(data.error || "Those songs could not be read.");
+      }
+      if (data.tracks.length === 0) {
+        setPickerError("This playlist has no playable songs.");
+        return;
+      }
+      onAdd(data.tracks, connected.provider);
+      setPicked(new Set());
+    } catch (error) {
+      setPickerError(getErrorMessage(error));
+    } finally {
+      setIsAddingPlaylist(false);
+    }
+  }
+
   // Nothing to show on a server with no music services set up.
   if (!accountToken || available === null || available.length === 0) return null;
 
@@ -390,20 +421,31 @@ export default function SourcePicker({
       )}
 
       <div className="source-actions">
-        <button
-          type="button"
-          className="secondary-button"
-          disabled={disabled || selected.length === 0}
-          onClick={() => {
-            onAdd(selected, connected.provider);
-            setPicked(new Set());
-          }}
-        >
-          <Plus size={16} />
-          {selected.length === 0
-            ? "Select songs to add"
-            : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
-        </button>
+        <div className="picker-add-actions">
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={disabled || selected.length === 0}
+            onClick={() => {
+              onAdd(selected, connected.provider);
+              setPicked(new Set());
+            }}
+          >
+            <Plus size={16} />
+            {selected.length === 0
+              ? "Select songs to add"
+              : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
+          </button>
+          <button
+            type="button"
+            className="secondary-button"
+            disabled={disabled || !playlistId || isAddingPlaylist}
+            onClick={() => void addEntirePlaylist()}
+          >
+            <Plus size={16} />
+            {isAddingPlaylist ? "Adding playlist..." : "Add entire playlist"}
+          </button>
+        </div>
         <button
           type="button"
           className="text-button"

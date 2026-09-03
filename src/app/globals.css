@@ -404,6 +404,32 @@ button:active:not(:disabled) {
   line-height: 1.5;
 }
 
+.setup-finalize {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.setup-finalize .section-heading {
+  margin-bottom: 18px;
+}
+
+.setup-launch-action {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.setup-finalize .launch-note {
+  color: var(--muted);
+}
+
+.desktop-launch-action {
+  display: none;
+}
+
 .tip-ready {
   width: fit-content;
   margin-top: 10px;
@@ -1902,6 +1928,14 @@ button:active:not(:disabled) {
     top: 24px;
   }
 
+  .setup-launch-action {
+    display: none;
+  }
+
+  .desktop-launch-action {
+    display: block;
+  }
+
   .live-grid {
     grid-template-columns: 330px minmax(0, 1fr);
   }
@@ -2138,6 +2172,13 @@ button:active:not(:disabled) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
+}
+
+.picker-add-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   flex-wrap: wrap;
 }
 

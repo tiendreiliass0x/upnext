@@ -62,7 +62,7 @@ type DraftTrack = {
   id: string;
   title: string;
   artist: string;
-  source: "demo" | "upload" | "playlist" | "library" | "soundcloud";
+  source: "upload" | "playlist" | "library" | "soundcloud";
   file?: File;
   previewKey?: string;
   // Set only for a row picked from a connected service. The server re-reads
@@ -74,39 +74,6 @@ type DraftTrack = {
   permalinkUrl?: string;
   uploaderName?: string;
 };
-
-const demoTracks: DraftTrack[] = [
-  {
-    id: "demo-1",
-    title: "NUEVAYoL",
-    artist: "Bad Bunny",
-    source: "demo",
-  },
-  {
-    id: "demo-2",
-    title: "Sticky",
-    artist: "Tyler, The Creator",
-    source: "demo",
-  },
-  {
-    id: "demo-3",
-    title: "Guess",
-    artist: "Charli xcx feat. Billie Eilish",
-    source: "demo",
-  },
-  {
-    id: "demo-4",
-    title: "Messy",
-    artist: "Lola Young",
-    source: "demo",
-  },
-  {
-    id: "demo-5",
-    title: "APT.",
-    artist: "ROSÉ & Bruno Mars",
-    source: "demo",
-  },
-];
 
 function createClientId() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -537,7 +504,7 @@ export default function Dashboard({
   const [venue, setVenue] = useState("Room 02");
   const [cashAppHandle, setCashAppHandle] = useState("");
   const [venmoHandle, setVenmoHandle] = useState("");
-  const [draftTracks, setDraftTracks] = useState<DraftTrack[]>(demoTracks);
+  const [draftTracks, setDraftTracks] = useState<DraftTrack[]>([]);
   const [session, setSession] = useState<PublicSession | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(sharedSessionId);
   const [hostKey, setHostKey] = useState("");
@@ -1093,11 +1060,8 @@ export default function Dashboard({
 
     if (setupLockedRef.current) return;
     setDraftTracks((current) => {
-      const base = current.every((track) => track.source === "demo")
-        ? []
-        : current;
       const knownTracks = new Set(
-        base.map((track) => `${track.artist}-${track.title}`.toLowerCase()),
+        current.map((track) => `${track.artist}-${track.title}`.toLowerCase()),
       );
       const uniqueIncoming = incoming.filter((track) => {
         const key = `${track.artist}-${track.title}`.toLowerCase();
@@ -1106,7 +1070,7 @@ export default function Dashboard({
         return true;
       });
 
-      return [...base, ...uniqueIncoming].slice(0, 200);
+      return [...current, ...uniqueIncoming].slice(0, 200);
     });
     setError("");
   }
@@ -1114,11 +1078,10 @@ export default function Dashboard({
   function addLibraryTracks(picked: LibraryTrack[]) {
     if (setupLockedRef.current || picked.length === 0) return;
     setDraftTracks((current) => {
-      const base = current.every((track) => track.source === "demo") ? [] : current;
       // A catalogue song already has its preview, so the same song twice would
       // upload nothing but would still queue twice. Library tracks keep the
       // catalogue ID as their draft ID, so that is the key to compare on.
-      const known = new Set(base.map((track) => track.id));
+      const known = new Set(current.map((track) => track.id));
       const additions: DraftTrack[] = [];
       for (const track of picked) {
         const key = track.id;
@@ -1132,7 +1095,7 @@ export default function Dashboard({
           previewKey: track.libraryPreviewKey ?? undefined,
         });
       }
-      return [...base, ...additions].slice(0, 200);
+      return [...current, ...additions].slice(0, 200);
     });
     setError("");
   }
@@ -1140,10 +1103,9 @@ export default function Dashboard({
   function addProviderTracks(picked: ProviderTrack[], provider: ProviderId) {
     if (setupLockedRef.current || picked.length === 0) return;
     setDraftTracks((current) => {
-      const base = current.every((track) => track.source === "demo") ? [] : current;
       // The provider's own ID is the draft ID, so picking the same song out of
       // two playlists queues it once, the way the library picker behaves.
-      const known = new Set(base.map((track) => track.id));
+      const known = new Set(current.map((track) => track.id));
       const additions: DraftTrack[] = [];
       for (const track of picked) {
         const key = `${provider}:${track.providerTrackId}`;
@@ -1161,7 +1123,7 @@ export default function Dashboard({
           uploaderName: track.uploaderName,
         });
       }
-      return [...base, ...additions].slice(0, 200);
+      return [...current, ...additions].slice(0, 200);
     });
     setError("");
   }
@@ -1805,7 +1767,6 @@ export default function Dashboard({
             )
           }
           onClear={() => !isStarting && setDraftTracks([])}
-          onRestoreDemo={() => !isStarting && setDraftTracks(demoTracks)}
           accountToken={accountToken}
           onAddLibraryTracks={addLibraryTracks}
           onAddProviderTracks={addProviderTracks}
@@ -1885,6 +1846,7 @@ export function LibraryPicker({
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
+  const [isAddingLibrary, setIsAddingLibrary] = useState(false);
   const [pickerError, setPickerError] = useState("");
 
   useEffect(() => {
@@ -1953,6 +1915,37 @@ export function LibraryPicker({
       window.clearTimeout(timer);
     };
   }, [accountToken, libraryId, query]);
+
+  async function addEntireLibrary() {
+    if (!libraryId || isAddingLibrary) return;
+    setIsAddingLibrary(true);
+    setPickerError("");
+    try {
+      const response = await fetchWithTimeout(
+        `/api/libraries/${encodeURIComponent(libraryId)}/tracks?q=`,
+        {
+          cache: "no-store",
+          headers: { Authorization: `Bearer ${accountToken}` },
+        },
+      );
+      const data = await readJson<{ tracks?: LibraryTrack[]; error?: string }>(
+        response,
+      );
+      if (!response.ok || !data.tracks) {
+        throw new Error(data.error || "The library could not be read.");
+      }
+      if (data.tracks.length === 0) {
+        setPickerError("This library has no songs.");
+        return;
+      }
+      onAdd(data.tracks);
+      setPicked(new Set());
+    } catch (error) {
+      setPickerError(getErrorMessage(error));
+    } finally {
+      setIsAddingLibrary(false);
+    }
+  }
 
   // Nothing to show before the catalogue has any libraries in it.
   if (!accountToken || libraries === null || libraries.length === 0) return null;
@@ -2031,20 +2024,31 @@ export function LibraryPicker({
         </ul>
       )}
 
-      <button
-        type="button"
-        className="secondary-button"
-        disabled={disabled || selected.length === 0}
-        onClick={() => {
-          onAdd(selected);
-          setPicked(new Set());
-        }}
-      >
-        <Plus size={16} />
-        {selected.length === 0
-          ? "Select songs to add"
-          : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
-      </button>
+      <div className="picker-add-actions">
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={disabled || selected.length === 0}
+          onClick={() => {
+            onAdd(selected);
+            setPicked(new Set());
+          }}
+        >
+          <Plus size={16} />
+          {selected.length === 0
+            ? "Select songs to add"
+            : `Add ${selected.length} song${selected.length === 1 ? "" : "s"}`}
+        </button>
+        <button
+          type="button"
+          className="secondary-button"
+          disabled={disabled || !libraryId || isAddingLibrary}
+          onClick={() => void addEntireLibrary()}
+        >
+          <Plus size={16} />
+          {isAddingLibrary ? "Adding library..." : "Add entire library"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -2066,7 +2070,6 @@ type DJSetupProps = {
   onDragChange: (value: boolean) => void;
   onRemoveTrack: (trackId: string) => void;
   onClear: () => void;
-  onRestoreDemo: () => void;
   accountToken: string;
   onAddLibraryTracks: (tracks: LibraryTrack[]) => void;
   onAddProviderTracks: (tracks: ProviderTrack[], provider: ProviderId) => void;
@@ -2090,7 +2093,6 @@ function DJSetup({
   onDragChange,
   onRemoveTrack,
   onClear,
-  onRestoreDemo,
   accountToken,
   onAddLibraryTracks,
   onAddProviderTracks,
@@ -2102,6 +2104,14 @@ function DJSetup({
   const cashAppMessage = tipHandleError("cashApp", cashAppHandle);
   const venmoMessage = tipHandleError("venmo", venmoHandle);
   const tipHandlesBroken = Boolean(cashAppMessage || venmoMessage);
+  const launchDisabled =
+    isStarting ||
+    tracks.length === 0 ||
+    !sessionName.trim() ||
+    tipHandlesBroken;
+  const launchLabel = isStarting
+    ? uploadProgress || "Opening room..."
+    : "Start session";
 
   return (
     <main className="setup-page page-shell">
@@ -2225,6 +2235,79 @@ function DJSetup({
                 </span>
               </label>
 
+              <div className="setup-finalize" aria-labelledby="tips-title">
+                <div className="section-heading">
+                  <h2 id="tips-title">Let the crowd tip you</h2>
+                  <p>
+                    Optional. Add either handle and fans can tip you after voting
+                    for a song.
+                  </p>
+                </div>
+                <div className="field-grid tip-fields">
+                  <label className="field">
+                    <span>Cash App <small>optional</small></span>
+                    <input
+                      type="text"
+                      value={cashAppHandle}
+                      maxLength={21}
+                      placeholder="$cashtag"
+                      autoCapitalize="none"
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={isStarting}
+                      aria-invalid={Boolean(cashAppMessage)}
+                      aria-describedby={cashAppMessage ? "cash-app-error" : undefined}
+                      onChange={(event) => onCashAppHandleChange(event.target.value)}
+                    />
+                    {cashAppMessage && (
+                      <small className="field-error" id="cash-app-error">
+                        {cashAppMessage}
+                      </small>
+                    )}
+                  </label>
+                  <label className="field">
+                    <span>Venmo <small>optional</small></span>
+                    <input
+                      type="text"
+                      value={venmoHandle}
+                      maxLength={31}
+                      placeholder="@username"
+                      autoCapitalize="none"
+                      autoComplete="off"
+                      spellCheck={false}
+                      disabled={isStarting}
+                      aria-invalid={Boolean(venmoMessage)}
+                      aria-describedby={venmoMessage ? "venmo-error" : undefined}
+                      onChange={(event) => onVenmoHandleChange(event.target.value)}
+                    />
+                    {venmoMessage && (
+                      <small className="field-error" id="venmo-error">
+                        {venmoMessage}
+                      </small>
+                    )}
+                  </label>
+                </div>
+                <p className="tip-setup-note">
+                  These handles are public and fixed once this room goes live.
+                  Use profiles you own that are eligible to receive business
+                  payments.
+                </p>
+                <div className="setup-launch-action">
+                  <button
+                    type="button"
+                    className="primary-button launch-button"
+                    onClick={onStart}
+                    disabled={launchDisabled}
+                  >
+                    <span>{launchLabel}</span>
+                    <ArrowRight size={20} />
+                  </button>
+                  <small className="launch-note">
+                    Your music is stored privately and only streams inside the session.
+                  </small>
+                </div>
+              </div>
+
               {tracks.length > 0 ? (
                 <div className="draft-list">
                   <div className="draft-list-meta">
@@ -2266,80 +2349,10 @@ function DJSetup({
                   <ListMusic size={26} strokeWidth={1.6} />
                   <div>
                     <strong>Your set is empty</strong>
-                    <p>Add files above or restore the example playlist.</p>
+                    <p>Add files or choose music above.</p>
                   </div>
-                  <button
-                    type="button"
-                    className="text-button"
-                    onClick={onRestoreDemo}
-                    disabled={isStarting}
-                  >
-                    Restore demo
-                  </button>
                 </div>
               )}
-            </div>
-          </section>
-
-          <section className="form-section" aria-labelledby="tips-title">
-            <div className="section-number">03</div>
-            <div className="section-content">
-              <div className="section-heading">
-                <h2 id="tips-title">Let the crowd tip you</h2>
-                <p>
-                  Optional. Add either handle and fans can tip you after voting
-                  for a song.
-                </p>
-              </div>
-              <div className="field-grid tip-fields">
-                <label className="field">
-                  <span>Cash App <small>optional</small></span>
-                  <input
-                    type="text"
-                    value={cashAppHandle}
-                    maxLength={21}
-                    placeholder="$cashtag"
-                    autoCapitalize="none"
-                    autoComplete="off"
-                    spellCheck={false}
-                    disabled={isStarting}
-                    aria-invalid={Boolean(cashAppMessage)}
-                    aria-describedby={cashAppMessage ? "cash-app-error" : undefined}
-                    onChange={(event) => onCashAppHandleChange(event.target.value)}
-                  />
-                  {cashAppMessage && (
-                    <small className="field-error" id="cash-app-error">
-                      {cashAppMessage}
-                    </small>
-                  )}
-                </label>
-                <label className="field">
-                  <span>Venmo <small>optional</small></span>
-                  <input
-                    type="text"
-                    value={venmoHandle}
-                    maxLength={31}
-                    placeholder="@username"
-                    autoCapitalize="none"
-                    autoComplete="off"
-                    spellCheck={false}
-                    disabled={isStarting}
-                    aria-invalid={Boolean(venmoMessage)}
-                    aria-describedby={venmoMessage ? "venmo-error" : undefined}
-                    onChange={(event) => onVenmoHandleChange(event.target.value)}
-                  />
-                  {venmoMessage && (
-                    <small className="field-error" id="venmo-error">
-                      {venmoMessage}
-                    </small>
-                  )}
-                </label>
-              </div>
-              <p className="tip-setup-note">
-                These handles are public and fixed once this room goes live.
-                Use profiles you own that are eligible to receive business
-                payments.
-              </p>
             </div>
           </section>
         </div>
@@ -2365,25 +2378,21 @@ function DJSetup({
               </span>
             )}
           </div>
-          <button
-            type="button"
-            className="primary-button launch-button"
-            onClick={onStart}
-            disabled={
-              isStarting ||
-              tracks.length === 0 ||
-              !sessionName.trim() ||
-              tipHandlesBroken
-            }
-          >
-            <span>
-              {isStarting ? uploadProgress || "Opening room..." : "Start session"}
-            </span>
-            <ArrowRight size={20} />
-          </button>
-          <small className="launch-note">
-            Your music is stored privately and only streams inside the session.
-          </small>
+          <div className="desktop-launch-action">
+            <button
+              type="button"
+              className="primary-button launch-button"
+              aria-label="Start session from summary"
+              onClick={onStart}
+              disabled={launchDisabled}
+            >
+              <span>{launchLabel}</span>
+              <ArrowRight size={20} />
+            </button>
+            <small className="launch-note">
+              Your music is stored privately and only streams inside the session.
+            </small>
+          </div>
         </aside>
       </div>
     </main>
