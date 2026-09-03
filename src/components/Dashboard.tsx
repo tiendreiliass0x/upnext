@@ -2958,9 +2958,7 @@ function GuestRoom({
           playback={playback}
           onToggle={() => playerRef.current?.toggle()}
           onTip={
-            tippingEnabled &&
-            nowPlayingTrack &&
-            tipEligibleTrackIds.has(nowPlayingTrack.id)
+            tippingEnabled && nowPlayingTrack
               ? () => setTipTrack(nowPlayingTrack)
               : undefined
           }

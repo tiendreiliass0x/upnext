@@ -1688,11 +1688,10 @@ describe("the crowd's now-playing card", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers tipping from the live track card for a saved pick", async () => {
+  it("offers tipping from the live track card regardless of the viewer's vote", async () => {
     const user = userEvent.setup();
     const room = nowPlayingRoom();
     room.tipLinks = { cashApp: "https://cash.app/$DJOwl", venmo: null };
-    room.tipEligibleTrackIds = ["track-two"];
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => Response.json({ session: room })),
