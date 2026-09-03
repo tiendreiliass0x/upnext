@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mediaMocks = vi.hoisted(() => ({
   uploadPreview: vi.fn(),
@@ -12,7 +12,11 @@ vi.mock("@/lib/r2", () => ({
   getPreviewUrl: mediaMocks.getPreviewUrl,
 }));
 
-import { accountStorageQuota, POST as upload } from "@/app/api/uploads/route";
+import {
+  accountStorageQuota,
+  GET as getUploadStatus,
+  POST as upload,
+} from "@/app/api/uploads/route";
 import { resetRateLimits } from "@/lib/rate-limit";
 import { GET as getPreview } from "@/app/api/tracks/[id]/preview/route";
 import { createAccount } from "@/lib/accounts";
@@ -29,6 +33,7 @@ setupTestDatabase();
 
 function uploadRequest(input: {
   token?: string;
+  adminToken?: string;
   uploadId?: string;
   contentLength?: string | null;
   name?: string;
@@ -43,6 +48,7 @@ function uploadRequest(input: {
   );
   const headers: Record<string, string> = {};
   if (input.token) headers.Authorization = `Bearer ${input.token}`;
+  if (input.adminToken) headers["x-upnext-admin-token"] = input.adminToken;
   if (input.uploadId) headers["x-upnext-upload-id"] = input.uploadId;
   if (input.contentLength !== null) {
     headers["content-length"] = input.contentLength ?? "1024";
@@ -54,9 +60,22 @@ function uploadRequest(input: {
   });
 }
 
+function uploadStatusRequest(token: string, uploadId: string) {
+  return new Request(
+    `http://localhost/api/uploads?requestId=${encodeURIComponent(uploadId)}`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+}
+
 const mp3Bytes = new Uint8Array([
   0x49, 0x44, 0x33, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xfb, 0x90, 0x00, 0, 0,
 ]);
+const originalAdminToken = process.env.ADMIN_TOKEN;
+
+afterEach(() => {
+  if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+  else process.env.ADMIN_TOKEN = originalAdminToken;
+});
 
 async function json<T>(response: Response) {
   return (await response.json()) as T;
@@ -130,6 +149,46 @@ describe("upload API", () => {
     );
     expect(await json(repeated)).toEqual({ previewKey: firstBody.previewKey });
     expect(mediaMocks.uploadPreview).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports whether a timed-out upload is processing or ready", async () => {
+    const account = createAccount({
+      phone: "+32470000045",
+      pseudonym: "Patient Uploader",
+    });
+    let finishUpload: (() => void) | undefined;
+    mediaMocks.uploadPreview.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        finishUpload = resolve;
+      }),
+    );
+
+    const pending = upload(
+      uploadRequest({
+        token: account.authToken,
+        uploadId: "slow-upload",
+      }),
+    );
+    await vi.waitFor(() => expect(mediaMocks.uploadPreview).toHaveBeenCalled());
+
+    const processing = await getUploadStatus(
+      uploadStatusRequest(account.authToken, "slow-upload"),
+    );
+    expect(processing.status).toBe(202);
+    expect(await json(processing)).toEqual({ status: "processing" });
+    const unrelated = await getUploadStatus(
+      uploadStatusRequest(account.authToken, "different-upload"),
+    );
+    expect(unrelated.status).toBe(404);
+
+    finishUpload?.();
+    const completed = await pending;
+    const completedBody = await json<{ previewKey: string }>(completed);
+    const ready = await getUploadStatus(
+      uploadStatusRequest(account.authToken, "slow-upload"),
+    );
+    expect(ready.status).toBe(200);
+    expect(await json(ready)).toEqual({ previewKey: completedBody.previewKey });
   });
 
   it("rejects a file whose bytes are not audio, whatever its name says", async () => {
@@ -244,6 +303,30 @@ describe("preview API", () => {
     expect(mediaMocks.uploadPreview).not.toHaveBeenCalled();
   });
 
+  it("does not apply the account storage quota to a super-admin upload", async () => {
+    process.env.ADMIN_TOKEN = "super-admin";
+    const account = createAccount({
+      phone: "+32470000048",
+      pseudonym: "Curator",
+    });
+    registerAudioUpload({
+      objectKey: `audio/${account.id}/big.wav`,
+      accountId: account.id,
+      originalName: "big.wav",
+      sizeBytes: accountStorageQuota,
+    });
+
+    const response = await upload(
+      uploadRequest({
+        token: account.authToken,
+        adminToken: "super-admin",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mediaMocks.uploadPreview).toHaveBeenCalledTimes(1);
+  });
+
   it("turns away a client whose own upload is still in flight, for free", async () => {
     const account = createAccount({
       phone: "+32470000047",
@@ -297,5 +380,15 @@ describe("preview API", () => {
     expect(last?.status).toBe(429);
     expect(last?.headers.get("Retry-After")).toBeTruthy();
     expect(mediaMocks.uploadPreview).toHaveBeenCalledTimes(60);
+
+    process.env.ADMIN_TOKEN = "super-admin";
+    const elevated = await upload(
+      uploadRequest({
+        token: account.authToken,
+        adminToken: "super-admin",
+      }),
+    );
+    expect(elevated.status).toBe(200);
+    expect(mediaMocks.uploadPreview).toHaveBeenCalledTimes(61);
   });
 });

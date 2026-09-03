@@ -6,11 +6,12 @@ import { searchCatalogue } from "@/lib/libraries";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
-  if (!getAccountFromRequest(request) && !isAdminRequest(request)) {
+  const admin = isAdminRequest(request);
+  if (!getAccountFromRequest(request) && !admin) {
     return NextResponse.json({ error: "Sign in to continue." }, { status: 401 });
   }
   const query = new URL(request.url).searchParams.get("q") ?? "";
   return NextResponse.json({
-    tracks: searchCatalogue({ query: query.slice(0, 100) }),
+    tracks: searchCatalogue({ query: query.slice(0, 100), unbounded: admin }),
   });
 }

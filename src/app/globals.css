@@ -2547,6 +2547,94 @@ button:active:not(:disabled) {
   letter-spacing: -0.01em;
 }
 
+.admin-panel-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-panel-heading > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.admin-account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 310px), 1fr));
+  gap: 10px;
+}
+
+.admin-account-list li {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 94%, var(--ink));
+}
+
+.admin-account-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.admin-account-main .track-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-account-main small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.admin-account-state {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 12%, transparent);
+  color: var(--muted-strong);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.admin-account-state.is-live {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+.admin-account-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.admin-account-metrics strong {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.admin-account-warning {
+  margin: 10px 0 0;
+  color: var(--error);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .admin-inline-form {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr) auto;
@@ -2805,6 +2893,16 @@ button:active:not(:disabled) {
 
 .play-main-head .library-search {
   width: min(320px, 100%);
+}
+
+.play-notice {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .play-rows {

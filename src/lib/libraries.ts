@@ -122,8 +122,11 @@ export function listLibraryTracks(input: {
   libraryId: string;
   query?: string;
   limit?: number;
+  unbounded?: boolean;
 }): LibraryTrack[] {
-  const limit = Math.min(Math.max(input.limit ?? 200, 1), 500);
+  const limit = input.unbounded
+    ? -1
+    : Math.min(Math.max(input.limit ?? 200, 1), 500);
   const search = input.query?.trim() ?? "";
   const database = getDatabase();
 
@@ -160,8 +163,14 @@ export type CatalogueTrack = LibraryTrack & { libraryName: string };
  * because a DJ is building from a chosen set; /play searches the whole
  * catalogue because you are looking for a song, not a shelf.
  */
-export function searchCatalogue(input: { query?: string; limit?: number }): CatalogueTrack[] {
-  const limit = Math.min(Math.max(input.limit ?? 100, 1), 200);
+export function searchCatalogue(input: {
+  query?: string;
+  limit?: number;
+  unbounded?: boolean;
+}): CatalogueTrack[] {
+  const limit = input.unbounded
+    ? -1
+    : Math.min(Math.max(input.limit ?? 100, 1), 200);
   const search = input.query?.trim() ?? "";
   const database = getDatabase();
   const columns = `t.id, t.library_id, t.title, t.artist, t.preview_key,
@@ -221,6 +230,16 @@ export function addLibraryTrack(input: {
           )
           .get(input.previewKey, input.contributedBy, input.contributedBy);
         if (!upload) return "unknown_preview" as const;
+
+        // A retry after the attachment response was lost must reuse the row
+        // that already landed, not create a second copy of the same upload.
+        const existing = database
+          .prepare(
+            `SELECT id FROM library_tracks
+             WHERE library_id = ? AND preview_key = ?`,
+          )
+          .get(input.libraryId, input.previewKey) as { id: string } | undefined;
+        if (existing) return existing.id;
       }
 
       database
@@ -248,7 +267,7 @@ export function addLibraryTrack(input: {
       `SELECT id, library_id, title, artist, preview_key, contributed_by, created_at
        FROM library_tracks WHERE id = ?`,
     )
-    .get(id) as LibraryTrackRow;
+    .get(inserted) as LibraryTrackRow;
   return toLibraryTrack(row);
 }
 

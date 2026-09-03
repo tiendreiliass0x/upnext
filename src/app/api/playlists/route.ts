@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isAdminRequest } from "@/lib/admin";
 import { getAccountFromRequest } from "@/lib/auth";
 import {
   createPlaylist,
@@ -13,7 +14,9 @@ export async function GET(request: Request) {
   if (!account) {
     return NextResponse.json({ error: "Sign in to continue." }, { status: 401 });
   }
-  return NextResponse.json({ playlists: listPlaylists(account.id) });
+  return NextResponse.json({
+    playlists: listPlaylists(account.id, { unbounded: isAdminRequest(request) }),
+  });
 }
 
 export async function POST(request: Request) {
@@ -32,7 +35,13 @@ export async function POST(request: Request) {
       );
     }
     return NextResponse.json(
-      { playlist: createPlaylist({ accountId: account.id, name }) },
+      {
+        playlist: createPlaylist({
+          accountId: account.id,
+          name,
+          bypassLimit: isAdminRequest(request),
+        }),
+      },
       { status: 201 },
     );
   } catch (error) {

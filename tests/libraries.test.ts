@@ -232,6 +232,25 @@ describe("contributing to a library", () => {
       }),
     ).toMatchObject({ title: "Curated" });
   });
+
+  it("reuses a catalogue row when the same upload attachment is retried", () => {
+    const owner = account("+32470100004");
+    const library = createLibrary({ name: "L", description: "" });
+    const key = upload("audio/owner/idempotent.mp3", owner.id);
+    const input = {
+      libraryId: library.id,
+      title: "Once",
+      artist: "A",
+      previewKey: key,
+      contributedBy: owner.id,
+    };
+
+    const first = addLibraryTrack(input);
+    const retry = addLibraryTrack(input);
+
+    expect(retry).toMatchObject({ id: typeof first === "object" ? first?.id : "" });
+    expect(listLibraryTracks({ libraryId: library.id })).toHaveLength(1);
+  });
 });
 
 describe("legacy clips", () => {

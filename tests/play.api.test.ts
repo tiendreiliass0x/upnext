@@ -10,18 +10,28 @@ import { DELETE as deletePlaylistRoute, GET as getPlaylistRoute } from "@/app/ap
 import { POST as addTrackRoute } from "@/app/api/playlists/[id]/tracks/route";
 import { DELETE as removeTrackRoute } from "@/app/api/playlists/[id]/tracks/[trackId]/route";
 import { GET as previewRoute } from "@/app/api/library-tracks/[id]/preview/route";
+import { adminTokenHeader } from "@/lib/admin";
 import { addLibraryTrack, createLibrary } from "@/lib/libraries";
 import { createPlaylist, maximumPlaylistsPerAccount } from "@/lib/playlists";
 import { registerAudioUpload } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
 setupTestDatabase();
-afterEach(() => r2Mocks.getPreviewUrl.mockReset());
+const originalAdminToken = process.env.ADMIN_TOKEN;
+afterEach(() => {
+  r2Mocks.getPreviewUrl.mockReset();
+  if (originalAdminToken === undefined) delete process.env.ADMIN_TOKEN;
+  else process.env.ADMIN_TOKEN = originalAdminToken;
+});
 
-function req(url: string, o: { method?: string; body?: unknown; token?: string } = {}) {
+function req(
+  url: string,
+  o: { method?: string; body?: unknown; token?: string; admin?: string } = {},
+) {
   const headers: Record<string, string> = {};
   if (o.body !== undefined) headers["Content-Type"] = "application/json";
   if (o.token) headers.Authorization = `Bearer ${o.token}`;
+  if (o.admin) headers[adminTokenHeader] = o.admin;
   return new Request(url, {
     method: o.method ?? "GET",
     headers,
@@ -143,6 +153,26 @@ describe("play API", () => {
     expect(removed.status).toBe(200);
   });
 
+  it("adds an entire library to a playlist without copying songs", async () => {
+    const account = await dj("+32470004007");
+    const library = createLibrary({ name: "L", description: "" });
+    const created = await playlist(account.token);
+    catalogueSong(library.id, "First");
+    catalogueSong(library.id, "Second");
+
+    const added = await addTrackRoute(
+      req(`http://localhost/api/playlists/${created.id}/tracks`, {
+        method: "POST",
+        token: account.token,
+        body: { libraryId: library.id },
+      }),
+      ctx({ id: created.id }),
+    );
+
+    expect(added.status).toBe(201);
+    expect(await body(added)).toEqual({ added: 2, full: false });
+  });
+
   it("hands the player a signed URL as JSON, since audio cannot send a bearer header", async () => {
     const account = await dj("+32470004005");
     const library = createLibrary({ name: "L", description: "" });
@@ -193,5 +223,16 @@ describe("play API bounds", () => {
     );
     expect(response.status).toBe(409);
     expect((await body<{ error: string }>(response)).error).toMatch(/limit/i);
+
+    process.env.ADMIN_TOKEN = "super-admin";
+    const elevated = await createPlaylistRoute(
+      req("http://localhost/api/playlists", {
+        method: "POST",
+        token: account.token,
+        admin: "super-admin",
+        body: { name: "One more" },
+      }),
+    );
+    expect(elevated.status).toBe(201);
   });
 });

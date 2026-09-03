@@ -9,14 +9,19 @@ export async function GET(
   request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  if (!getAccountFromRequest(request) && !isAdminRequest(request)) {
+  const admin = isAdminRequest(request);
+  if (!getAccountFromRequest(request) && !admin) {
     return NextResponse.json({ error: "Sign in to continue." }, { status: 401 });
   }
 
   const { id } = await context.params;
   const query = new URL(request.url).searchParams.get("q") ?? "";
   return NextResponse.json({
-    tracks: listLibraryTracks({ libraryId: id, query: query.slice(0, 100) }),
+    tracks: listLibraryTracks({
+      libraryId: id,
+      query: query.slice(0, 100),
+      unbounded: admin,
+    }),
   });
 }
 

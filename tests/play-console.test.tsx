@@ -36,13 +36,22 @@ const libraries = [
   { id: "lib-afro", name: "Afrobeats", description: "", trackCount: 0, createdAt: "" },
 ];
 
-function mount(signedUrl: (id: string) => Promise<Response>) {
+function mount(
+  signedUrl: (id: string) => Promise<Response>,
+  playlists: Array<{ id: string; name: string; trackCount: number; createdAt: string }> = [],
+) {
   window.localStorage.setItem("upnext-account-token", "host-token");
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === "/api/playlists") return Response.json({ playlists: [] });
+      if (url === "/api/playlists") return Response.json({ playlists });
+      if (url.startsWith("/api/playlists/") && init?.method === "POST") {
+        return Response.json({ added: 2, full: false }, { status: 201 });
+      }
+      if (url.startsWith("/api/playlists/")) {
+        return Response.json({ playlist: playlists[0], tracks: [] });
+      }
       if (url === "/api/libraries") return Response.json({ libraries });
       if (url.startsWith("/api/libraries/")) {
         // A shelf answers with its own tracks, which carry no library name.
@@ -232,5 +241,39 @@ describe("browsing a catalogue in /play", () => {
 
     await user.click(await screen.findByRole("button", { name: /Afrobeats/ }));
     expect(await screen.findByText("This catalogue is empty.")).toBeInTheDocument();
+  });
+
+  it("adds a whole library to a playlist with the super-admin credential", async () => {
+    const user = userEvent.setup();
+    window.localStorage.setItem("upnext-admin-token", "super-admin");
+    mount(
+      (id) => Promise.resolve(Response.json({ url: `https://r2.example/${id}` })),
+      [{ id: "playlist-1", name: "Full set", trackCount: 0, createdAt: "" }],
+    );
+
+    await user.click(await screen.findByRole("button", { name: /Deep House/ }));
+    const picker = await screen.findByRole("combobox", {
+      name: "Add all songs from Deep House to a playlist",
+    });
+    await user.selectOptions(picker, "playlist-1");
+
+    await waitFor(() => {
+      const request = (
+        fetch as unknown as { mock: { calls: Array<[string, RequestInit]> } }
+      ).mock.calls.find(
+        ([url, init]) =>
+          url === "/api/playlists/playlist-1/tracks" && init?.method === "POST",
+      );
+      expect(request).toBeDefined();
+      expect(new Headers(request?.[1].headers).get("x-upnext-admin-token")).toBe(
+        "super-admin",
+      );
+      expect(request?.[1].body).toBe(JSON.stringify({ libraryId: "lib-house" }));
+    });
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Added 2 songs from the library.",
+    );
+    await user.click(screen.getByRole("button", { name: /Everything/ }));
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
   });
 });

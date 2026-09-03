@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
+import { isAdminRequest } from "@/lib/admin";
 import { sniffAudioFormat } from "@/lib/audio";
 import { getAccountFromRequest } from "@/lib/auth";
 import { deletePreview, uploadPreview } from "@/lib/r2";
@@ -31,18 +32,43 @@ const uploadRateLimit = { limit: 60, windowMs: 60 * 60 * 1000 };
 // waiting on its own previous file to finish.
 const busyRetryAfterSeconds = 5;
 type UploadRegistry = typeof globalThis & {
-  djBoothAudioJobs?: Set<string>;
+  djBoothAudioJobsByAccount?: Map<string, string>;
 };
 const uploadRegistry = globalThis as UploadRegistry;
 const activeAudioJobs =
-  uploadRegistry.djBoothAudioJobs ?? new Set<string>();
-uploadRegistry.djBoothAudioJobs = activeAudioJobs;
+  uploadRegistry.djBoothAudioJobsByAccount ?? new Map<string, string>();
+uploadRegistry.djBoothAudioJobsByAccount = activeAudioJobs;
+
+export async function GET(request: Request) {
+  const account = getAccountFromRequest(request);
+  if (!account) {
+    return NextResponse.json({ error: "Sign in to check an upload." }, { status: 401 });
+  }
+  const requestId = new URL(request.url).searchParams.get("requestId")?.trim() ?? "";
+  if (!requestId || requestId.length > 100) {
+    return NextResponse.json({ error: "An upload ID is required." }, { status: 400 });
+  }
+
+  const previewKey = getAudioUploadByRequest(account.id, requestId);
+  if (previewKey) return NextResponse.json({ previewKey });
+  if (activeAudioJobs.get(account.id) === requestId) {
+    return NextResponse.json(
+      { status: "processing" },
+      {
+        status: 202,
+        headers: { "Retry-After": String(busyRetryAfterSeconds) },
+      },
+    );
+  }
+  return NextResponse.json({ status: "missing" }, { status: 404 });
+}
 
 export async function POST(request: Request) {
   const account = getAccountFromRequest(request);
   if (!account) {
     return NextResponse.json({ error: "Sign in to upload music." }, { status: 401 });
   }
+  const admin = isAdminRequest(request);
   const rawRequestId = request.headers.get("x-upnext-upload-id")?.trim() ?? "";
   const requestId = rawRequestId.length <= 100 ? rawRequestId : "";
   if (requestId) {
@@ -82,11 +108,14 @@ export async function POST(request: Request) {
       { status: 429, headers: { "Retry-After": String(busyRetryAfterSeconds) } },
     );
   }
-  const retryAfter = takeRateLimit("uploads", account.id, uploadRateLimit);
-  if (retryAfter !== null) return rateLimitedResponse(retryAfter);
+  if (!admin) {
+    const retryAfter = takeRateLimit("uploads", account.id, uploadRateLimit);
+    if (retryAfter !== null) return rateLimitedResponse(retryAfter);
+  }
 
   let uploadedObjectKey = "";
-  activeAudioJobs.add(account.id);
+  const activeJobId = requestId || crypto.randomUUID();
+  activeAudioJobs.set(account.id, activeJobId);
   try {
     const formData = await request.formData();
     const file = formData.get("file");
@@ -122,7 +151,7 @@ export async function POST(request: Request) {
       );
     }
     const usedBytes = getAccountStorageBytes(account.id);
-    if (usedBytes + file.size > accountStorageQuota) {
+    if (!admin && usedBytes + file.size > accountStorageQuota) {
       const quotaMb = Math.round(accountStorageQuota / (1024 * 1024));
       return NextResponse.json(
         {
@@ -167,6 +196,8 @@ export async function POST(request: Request) {
         : "The audio could not be stored.";
     return NextResponse.json({ error: message }, { status: 500 });
   } finally {
-    activeAudioJobs.delete(account.id);
+    if (activeAudioJobs.get(account.id) === activeJobId) {
+      activeAudioJobs.delete(account.id);
+    }
   }
 }
