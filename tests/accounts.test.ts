@@ -75,6 +75,49 @@ describe("accounts", () => {
   });
 });
 
+describe("editing one field at a time", () => {
+  it("writes only the field it was given, so two edits cannot undo each other", () => {
+    const account = createAccount({
+      phone: "+32470123401",
+      pseudonym: "Original",
+    });
+
+    // Two requests that both read this snapshot and change different fields.
+    // A write that filled the untouched column in from the snapshot would
+    // carry the other one's pre-edit value back over the top of it.
+    updateAccountProfile(account, { pseudonym: "Renamed" });
+    updateAccountProfile(account, { tagline: "Vinyl only" });
+
+    const stored = getAccountByToken(account.authToken)!;
+    expect(stored.pseudonym).toBe("Renamed");
+    expect(stored.tagline).toBe("Vinyl only");
+  });
+
+  it("does not write when nothing actually changed", () => {
+    const account = createAccount({
+      phone: "+32470123402",
+      pseudonym: "Steady",
+    });
+    const { session } = createSession({
+      name: "Set",
+      venue: "",
+      accountId: account.id,
+      requestId: crypto.randomUUID(),
+      tracks: [{ title: "Opener", artist: "A" }],
+    });
+    const before = getSession(session.id)!.revision;
+
+    // An empty edit, and one that resubmits what is already stored. Writing
+    // for either would bump every room this account is visible in, which a
+    // caller could repeat to defeat the room's 304 polling.
+    updateAccountProfile(account, {});
+    updateAccountProfile(account, { pseudonym: "Steady", tagline: "" });
+    updateAccountProfile(account, { pseudonym: "  Steady  " });
+
+    expect(getSession(session.id)!.revision).toBe(before);
+  });
+});
+
 describe("renaming while in a room", () => {
   it("refreshes the station name in rooms the account hosts", () => {
     const host = createAccount({ phone: "+32470005000", pseudonym: "Old DJ" });

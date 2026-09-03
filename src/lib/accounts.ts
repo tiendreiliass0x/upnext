@@ -243,23 +243,46 @@ export function updateAccountProfile(
   account: StoredAccount,
   changes: { pseudonym?: string; tagline?: string },
 ): StoredAccount {
-  const pseudonym =
-    changes.pseudonym === undefined
-      ? account.pseudonym
-      : changes.pseudonym.trim();
-  const tagline =
-    changes.tagline === undefined ? account.tagline : changes.tagline.trim();
+  // Only the columns the caller named are written. Filling the others in from
+  // the snapshot this request read would make two concurrent edits of
+  // different fields undo one another: the second write would carry the first
+  // field's pre-edit value back over the top of it.
+  const columns: string[] = [];
+  const values: string[] = [];
+  const updated = { ...account };
+  if (changes.pseudonym !== undefined) {
+    const pseudonym = changes.pseudonym.trim();
+    if (pseudonym !== account.pseudonym) {
+      columns.push("pseudonym = ?");
+      values.push(pseudonym);
+      updated.pseudonym = pseudonym;
+    }
+  }
+  if (changes.tagline !== undefined) {
+    const tagline = changes.tagline.trim();
+    if (tagline !== account.tagline) {
+      columns.push("tagline = ?");
+      values.push(tagline);
+      updated.tagline = tagline;
+    }
+  }
+  // An empty PATCH, or one that resubmits what is already stored, is not a
+  // change. Writing anyway would bump the revision of every live room this
+  // account is in and cost each of their guests a full payload on the next
+  // poll in place of a 304 — which a caller could repeat at will.
+  if (columns.length === 0) return account;
+
   const database = getDatabase();
   database.transaction(() => {
     const now = new Date().toISOString();
     database
       .prepare(
-        "UPDATE accounts SET pseudonym = ?, tagline = ?, updated_at = ? WHERE id = ?",
+        `UPDATE accounts SET ${columns.join(", ")}, updated_at = ? WHERE id = ?`,
       )
-      .run(pseudonym, tagline, now, account.id);
+      .run(...values, now, account.id);
     touchAccountRooms(database, account.id, now);
   })();
-  return { ...account, pseudonym, tagline };
+  return updated;
 }
 
 /**
@@ -273,27 +296,54 @@ export function setAccountAvatar(
   account: StoredAccount,
   avatarKey: string | null,
 ): { account: StoredAccount; replacedKey: string | null } {
-  // Nothing to do, and worth saying so: the write would bump the revision of
-  // every live room this account is in, costing every guest in them a full
-  // payload on their next poll in place of a 304.
-  if (account.avatarKey === avatarKey) {
-    return { account, replacedKey: null };
-  }
   const database = getDatabase();
-  database.transaction(() => {
-    const now = new Date().toISOString();
-    database
-      .prepare("UPDATE accounts SET avatar_key = ?, updated_at = ? WHERE id = ?")
-      .run(avatarKey, now, account.id);
-    touchAccountRooms(database, account.id, now);
-  })();
+  // The key being replaced is read inside the write, not taken from the
+  // snapshot this request arrived with. Two uploads racing would otherwise
+  // both name the key they each saw and one of them would go on holding an
+  // object nothing points at — and nothing reaps avatars, so it would hold it
+  // for good.
+  const replacedKey = database
+    .transaction(() => {
+      const current = database
+        .prepare("SELECT avatar_key FROM accounts WHERE id = ?")
+        .get(account.id) as { avatar_key: string | null } | undefined;
+      const previous = current?.avatar_key ?? null;
+      // Nothing to do, and worth saying so: the write would bump the revision
+      // of every live room this account is in, costing every guest in them a
+      // full payload on their next poll in place of a 304.
+      if (previous === avatarKey) return null;
+      const now = new Date().toISOString();
+      database
+        .prepare(
+          "UPDATE accounts SET avatar_key = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(avatarKey, now, account.id);
+      touchAccountRooms(database, account.id, now);
+      return previous;
+    })
+    .immediate();
+
   return {
     account: { ...account, avatarKey, avatarUrl: avatarUrlFor(avatarKey) },
-    replacedKey:
-      account.avatarKey && account.avatarKey !== avatarKey
-        ? account.avatarKey
-        : null,
+    replacedKey,
   };
+}
+
+/**
+ * Whether an object key is still the picture of some account.
+ *
+ * The public avatar route asks before it signs anything. Removing a picture
+ * deletes its object, but that delete is best effort — it can fail, and the
+ * row is already forgotten by then — so without this check a URL handed out
+ * before the removal would keep resolving to the object for as long as the
+ * failed delete went unnoticed.
+ */
+export function avatarKeyIsCurrent(objectKey: string) {
+  return Boolean(
+    getDatabase()
+      .prepare("SELECT 1 FROM accounts WHERE avatar_key = ?")
+      .get(objectKey),
+  );
 }
 
 export function getAccountByToken(token: string) {

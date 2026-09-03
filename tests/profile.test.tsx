@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import Dashboard, { QueueList } from "@/components/Dashboard";
+import Dashboard, { prepareAvatarFile, QueueList } from "@/components/Dashboard";
 import type { PublicAccount } from "@/lib/accounts";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
 
@@ -102,9 +102,10 @@ describe("the profile sheet", () => {
     await user.click(within(sheet).getByRole("button", { name: /Save profile/ }));
 
     await screen.findByText("Profile saved.");
+    // Only the field the form changed. Sending the untouched one too lets a
+    // tab left open overwrite a value it was never asked to touch.
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({
       pseudonym: "Mint Fox",
-      tagline: "",
     });
     expect(
       await screen.findByRole("button", { name: /Signed in as Mint Fox/ }),
@@ -187,8 +188,10 @@ describe("the profile sheet", () => {
 
   it("says what went wrong and keeps the sheet open", async () => {
     const user = userEvent.setup();
+    let sent: RequestInit | undefined;
     bootDashboard(signedIn, (url, init) => {
       if (url === "/api/accounts" && init?.method === "PATCH") {
+        sent = init;
         return Response.json({ error: "That name is taken." }, { status: 409 });
       }
       return undefined;
@@ -199,6 +202,7 @@ describe("the profile sheet", () => {
     await user.click(within(sheet).getByRole("button", { name: /Save profile/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("That name is taken.");
+    expect(JSON.parse(String(sent?.body))).toEqual({ tagline: "Vinyl only" });
     expect(screen.getByRole("dialog", { name: "How the room sees you" })).toBeInTheDocument();
   });
 
@@ -291,5 +295,62 @@ describe("a picture where an initial used to be", () => {
       "src",
       "/api/avatars/owl.png",
     );
+  });
+});
+
+describe("shrinking a picture before it is sent", () => {
+  it("hands the file back untouched when the browser cannot resize", async () => {
+    // jsdom has no canvas and no createImageBitmap. The upload still has to
+    // go: the route's own limits are the check, this is the optimisation.
+    const original = pngFile("original.png", 4096);
+    await expect(prepareAvatarFile(original)).resolves.toBe(original);
+  });
+
+  it("leaves a picture that is already small enough alone", async () => {
+    const drawn: Array<[number, number]> = [];
+    vi.stubGlobal("createImageBitmap", async () => ({
+      width: 128,
+      height: 96,
+      close() {},
+    }));
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) => {
+      if (tag !== "canvas") throw new Error("unexpected element");
+      drawn.push([0, 0]);
+      return {} as HTMLElement;
+    }) as typeof document.createElement);
+
+    const small = pngFile("small.png", 512);
+    await expect(prepareAvatarFile(small)).resolves.toBe(small);
+    // Re-encoding a picture that already fits would only lose quality.
+    expect(drawn).toHaveLength(0);
+  });
+
+  it("shrinks a phone camera original to something a face can use", async () => {
+    let drawnTo: { width: number; height: number } | null = null;
+    vi.stubGlobal("createImageBitmap", async () => ({
+      width: 4032,
+      height: 3024,
+      close() {},
+    }));
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ drawImage: () => undefined }),
+      toBlob: (done: (blob: Blob) => void) => {
+        drawnTo = { width: canvas.width, height: canvas.height };
+        done(new Blob([new Uint8Array(2048)], { type: "image/jpeg" }));
+      },
+    };
+    vi.spyOn(document, "createElement").mockImplementation(((tag: string) =>
+      tag === "canvas" ? canvas : ({} as HTMLElement)) as typeof document.createElement);
+
+    const huge = pngFile("huge.png", 5 * 1024 * 1024);
+    const prepared = await prepareAvatarFile(huge);
+
+    expect(prepared).not.toBe(huge);
+    expect(prepared.type).toBe("image/jpeg");
+    expect(prepared.size).toBeLessThan(huge.size);
+    // The long side lands on the upload size and the aspect ratio holds.
+    expect(drawnTo).toEqual({ width: 512, height: 384 });
   });
 });

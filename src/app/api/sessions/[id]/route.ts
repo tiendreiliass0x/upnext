@@ -13,7 +13,9 @@ export const dynamic = "force-dynamic";
 
 // Bump when the shape or meaning of PublicSession changes so a tag issued by
 // the previous deployment cannot answer 304 for a representation it lacked.
-const roomRepresentationVersion = 3;
+// 4: every face gained a picture (per-voter avatarUrl) and the room gained
+// its host's picture and tagline. 3 was tipEligibleTrackIds.
+const roomRepresentationVersion = 4;
 
 // The room payload carries per-viewer vote and tip eligibility fields, so the
 // tag has to identify the viewer as well as the room revision. The viewer is

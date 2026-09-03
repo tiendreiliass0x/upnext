@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { avatarKeyIsCurrent } from "@/lib/accounts";
 import { avatarKeyForName } from "@/lib/profile";
 import { getPreviewUrl, signedReadSeconds } from "@/lib/r2";
 
@@ -24,7 +25,12 @@ export async function GET(
 ) {
   const { name } = await context.params;
   const objectKey = avatarKeyForName(name);
-  if (!objectKey) {
+  // Well-formed is not enough. Removing a picture deletes its object, but that
+  // delete is best effort and the row is already forgotten by the time it runs,
+  // so a route that signed any well-formed name would keep serving a removed
+  // picture to whoever kept the URL for as long as a failed delete went
+  // unnoticed. Only a key some account still points at is signed.
+  if (!objectKey || !avatarKeyIsCurrent(objectKey)) {
     return NextResponse.json(
       { error: "That profile picture was not found." },
       { status: 404 },
