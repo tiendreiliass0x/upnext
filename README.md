@@ -15,7 +15,7 @@ and vote the queue into order.
 2. Install dependencies with `bun install`.
 3. Start the app with `bun run dev`.
 
-Local development listens on `:3001`, leaving `:3000` available for the
+Local development listens on `:3003`, leaving `:3000` available for the
 separate `upnext-serve` production checkout.
 
 Deploy the latest `main` build to that production checkout with:
@@ -48,7 +48,7 @@ same-network one rather than handing out a code that cannot work.
 ### Reaching the dev server from another network
 
 `dev.younext.dev` is a named Cloudflare tunnel (`upnext-dev`) into the dev
-server on `:3001`. Its config and credentials live in `~/.cloudflared/` on the
+server on `:3003`. Its config and credentials live in `~/.cloudflared/` on the
 DJ's laptop, outside the repo, because the credentials file is a secret. It runs
 as a launchd service (`cloudflared service install`), so it is up whenever the
 laptop is; `cloudflared tunnel run upnext-dev` runs it in the foreground
@@ -64,7 +64,7 @@ Each machine that runs the booth gets its own tunnel and hostname
 connectors round-robins requests between them, and two dev servers do not
 share a database. On the new machine: `cloudflared tunnel login`,
 `cloudflared tunnel create <name>`, `cloudflared tunnel route dns <name>
-<host>.younext.dev`, the same `config.yml` with `127.0.0.1:3001` as the
+<host>.younext.dev`, the same `config.yml` with `127.0.0.1:3003` as the
 service, `cloudflared service install`, that machine's `APP_PUBLIC_URL`, and
 the hostname added to `devTunnelHosts` in `next.config.ts`. A quick tunnel (`cloudflared tunnel --url ...`) still
 works for a one-off, but its random hostname is not on that list, so pages
@@ -177,7 +177,7 @@ Registration is self-serve at
 active SoundCloud Artist Pro subscription. The redirect URI must be registered
 there character for character and is derived from `APP_PUBLIC_URL` as
 `<APP_PUBLIC_URL>/api/connections/soundcloud/callback` — in development,
-`http://127.0.0.1:3001/api/connections/soundcloud/callback`.
+`http://127.0.0.1:3003/api/connections/soundcloud/callback`.
 
 Generate the sealing key with:
 
