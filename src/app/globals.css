@@ -1189,7 +1189,12 @@ button:active:not(:disabled) {
   gap: 5px;
   border: 1px solid color-mix(in srgb, var(--accent-pressed) 70%, var(--line));
   border-radius: 999px;
-  background: color-mix(in srgb, var(--accent) 45%, transparent);
+  /* Filled, not tinted: this chip sits on the ballot's --surface and on the
+     now-playing card's inverted --surface-strong, and both swap ends between
+     the light and dark schemes. Against whichever of the two is dark, a tint
+     composites to a mid-grey and leaves the 9px label near 3.3:1, so the chip
+     carries its own ground instead. */
+  background: var(--accent);
   color: var(--accent-ink);
   font-family: var(--font-geist-mono), monospace;
   font-size: 9px;
@@ -1199,7 +1204,7 @@ button:active:not(:disabled) {
 }
 
 .tip-pick-button:hover {
-  background: var(--accent);
+  background: var(--accent-pressed);
 }
 
 .tip-sheet-backdrop {
@@ -1522,6 +1527,9 @@ button:active:not(:disabled) {
 .now-playing-card .top-pick-player {
   margin-bottom: 0;
   border-radius: 0;
+  /* The card around it rises in as one piece; animating the button as well
+     would slide it out from under its own opaque background. */
+  animation: none;
 }
 
 .now-playing-tip-button {
@@ -1966,6 +1974,7 @@ button:active:not(:disabled) {
   .live-grid,
   .setup-grid,
   .top-pick,
+  .now-playing-card,
   .guest-ballot {
     animation: rise-in 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
