@@ -26,7 +26,7 @@ export default defineConfig({
       reporter: ["text", "json-summary", "html"],
       reportsDirectory: "./coverage",
       include: [
-        "src/lib/{accounts,admin,auth,cleanup,config,connections,db,libraries,playlists,provider-preview,secrets,sessions,audio,r2,voters}.ts",
+        "src/lib/{accounts,admin,auth,cleanup,config,connections,db,images,libraries,playlists,profile,provider-preview,secrets,sessions,audio,r2,voters}.ts",
         "src/lib/providers/*.ts",
         "src/app/api/**/*.ts",
         "src/components/Dashboard.tsx",

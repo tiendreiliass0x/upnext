@@ -133,5 +133,43 @@ describe("database migrations", () => {
     expect(
       migrated.prepare("SELECT COUNT(*) AS count FROM votes").get(),
     ).toEqual({ count: 0 });
+
+    // The profile columns arrive together — the check that guards them only
+    // asks about avatar_key, so a half-applied pair would leave every account
+    // read naming a column that is not there.
+    const accountColumns = migrated.pragma("table_info(accounts)") as Array<{
+      name: string;
+    }>;
+    expect(accountColumns.map(({ name }) => name)).toContain("avatar_key");
+    expect(accountColumns.map(({ name }) => name)).toContain("tagline");
+    expect(
+      migrated
+        .prepare("SELECT avatar_key, tagline FROM accounts WHERE id = 'legacy-account'")
+        .get(),
+    ).toEqual({ avatar_key: null, tagline: "" });
+  });
+
+  it("leaves an already-migrated database alone", () => {
+    const first = getDatabase();
+    first
+      .prepare(
+        `INSERT INTO accounts
+          (id, phone, pseudonym, auth_token, avatar_key, tagline, created_at, updated_at)
+         VALUES ('kept', '+32470000998', 'Kept', 'kept-token',
+                 'avatars/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.png', 'Vinyl only',
+                 '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
+      )
+      .run();
+    closeDatabase();
+
+    // Booting again must not re-run the ALTERs or reset what they added.
+    expect(
+      getDatabase()
+        .prepare("SELECT avatar_key, tagline FROM accounts WHERE id = 'kept'")
+        .get(),
+    ).toEqual({
+      avatar_key: "avatars/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.png",
+      tagline: "Vinyl only",
+    });
   });
 });

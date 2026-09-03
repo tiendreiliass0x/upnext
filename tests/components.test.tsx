@@ -164,6 +164,8 @@ describe("identity onboarding", () => {
       id: "ABC123",
       name: "Browser Vote Room",
       djName: "DJ Owl",
+      djAvatarUrl: null,
+      djTagline: "",
       tipLinks: { cashApp: null, venmo: null },
       venue: "Test Venue",
       createdAt: "2026-08-26T00:00:00.000Z",
@@ -269,6 +271,8 @@ describe("identity onboarding", () => {
             id: "ABC123",
             name: "Authoritative Room",
             djName: "DJ Owl",
+            djAvatarUrl: null,
+            djTagline: "",
             tipLinks: { cashApp: null, venmo: null },
             venue: "",
             createdAt: "2026-08-26T00:00:00.000Z",
@@ -304,6 +308,8 @@ describe("conditional room polling", () => {
     id: "ABC123",
     name: "Conditional Room",
     djName: "DJ Owl",
+    djAvatarUrl: null,
+    djTagline: "",
     tipLinks: { cashApp: null, venmo: null },
     venue: "Test Venue",
     createdAt: "2026-08-26T00:00:00.000Z",
@@ -369,6 +375,8 @@ describe("guest link reachability", () => {
     id: "ABC123",
     name: "Host Room",
     djName: "DJ Owl",
+    djAvatarUrl: null,
+    djTagline: "",
     tipLinks: { cashApp: null, venmo: null },
     venue: "Test Venue",
     createdAt: "2026-08-26T00:00:00.000Z",
@@ -825,10 +833,9 @@ describe("tip handles in the setup form", () => {
     expect(screen.getByText("Crowd tips enabled")).toBeInTheDocument();
   });
 
-  it("keeps payment details and the start action ahead of the track state", async () => {
+  it("keeps payment details ahead of the track state, under one start action", async () => {
     const { field } = await typeCashtag("$DJOwl");
     const uploader = screen.getByText("Choose files").closest("label");
-    const start = screen.getByRole("button", { name: "Start session" });
     const trackState = document.querySelector(".empty-tracks");
 
     expect(uploader).not.toBeNull();
@@ -837,12 +844,15 @@ describe("tip handles in the setup form", () => {
     expect(
       uploader?.compareDocumentPosition(field) ?? 0,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(field.compareDocumentPosition(start)).toBe(
+    expect(field.compareDocumentPosition(trackState as Node)).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
-    expect(start.compareDocumentPosition(trackState as Node)).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    );
+    // One Start, and it lives in the launch panel: the aside is sticky beside
+    // the form on desktop and a bar pinned to the bottom below 900px, so the
+    // action is always in reach without a second copy inside the form.
+    const starts = screen.getAllByRole("button", { name: "Start session" });
+    expect(starts).toHaveLength(1);
+    expect(starts[0].closest(".launch-panel")).not.toBeNull();
   });
 });
 
@@ -851,6 +861,8 @@ describe("external tips", () => {
     id: "ABC123",
     name: "Tip Room",
     djName: "DJ Owl",
+    djAvatarUrl: null,
+    djTagline: "",
     tipLinks: {
       cashApp: "https://cash.app/$DJOwl",
       venmo: "https://account.venmo.com/u/dj-owl",
@@ -1224,6 +1236,8 @@ describe("now playing", () => {
     id: "ABC123",
     name: "Room",
     djName: "DJ Owl",
+    djAvatarUrl: null,
+    djTagline: "",
     tipLinks: { cashApp: null, venmo: null },
     venue: "",
     createdAt: "2026-08-26T00:00:00.000Z",
@@ -1523,6 +1537,8 @@ describe("the crowd's pre-listen", () => {
     id: "ABC123",
     name: "Room",
     djName: "DJ Owl",
+    djAvatarUrl: null,
+    djTagline: "",
     tipLinks: { cashApp: null, venmo: null },
     venue: "",
     createdAt: new Date().toISOString(),
@@ -1585,6 +1601,8 @@ describe("handing the room back after a pre-listen", () => {
     id: "ABC123",
     name: "Room",
     djName: "DJ Owl",
+    djAvatarUrl: null,
+    djTagline: "",
     tipLinks: { cashApp: null, venmo: null },
     venue: "",
     createdAt: new Date().toISOString(),
@@ -1689,6 +1707,8 @@ describe("the crowd's now-playing card", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      djAvatarUrl: null,
+      djTagline: "",
       tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: new Date().toISOString(),
@@ -1933,6 +1953,8 @@ describe("the room-wide face stack in the booth", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      djAvatarUrl: null,
+      djTagline: "",
       tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: new Date().toISOString(),
@@ -1942,7 +1964,7 @@ describe("the room-wide face stack in the booth", () => {
       votedTrackIds: [],
       anonymousVoteUsed: false,
       nowPlaying: null,
-      voters: [{ name: "Delia Perla" }, { name: "Amyr" }, { name: null }],
+      voters: [{ name: "Delia Perla", avatarUrl: null }, { name: "Amyr", avatarUrl: null }, { name: null, avatarUrl: null }],
       tracks,
     };
     vi.stubGlobal(
@@ -1980,6 +2002,8 @@ describe("the room-wide face stack on the guest page", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      djAvatarUrl: null,
+      djTagline: "",
       tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: new Date().toISOString(),
@@ -1989,7 +2013,7 @@ describe("the room-wide face stack on the guest page", () => {
       votedTrackIds: [],
       anonymousVoteUsed: false,
       nowPlaying: null,
-      voters: [{ name: "Delia Perla" }, { name: "Amyr" }, { name: null }],
+      voters: [{ name: "Delia Perla", avatarUrl: null }, { name: "Amyr", avatarUrl: null }, { name: null, avatarUrl: null }],
       tracks,
     };
     vi.stubGlobal(
@@ -2017,7 +2041,7 @@ describe("the faces behind a row's votes", () => {
   it("shows an initial per named voter, a blank bubble per anonymous one, and the overflow", () => {
     render(
       <QueueList
-        tracks={[withVoters([{ name: "Amyr" }, { name: "Nathan Krishnan" }, { name: null }], 173)]}
+        tracks={[withVoters([{ name: "Amyr", avatarUrl: null }, { name: "Nathan Krishnan", avatarUrl: null }, { name: null, avatarUrl: null }], 173)]}
       />,
     );
     const stack = screen.getByLabelText("Voted by Amyr, Nathan Krishnan and 171 others");
@@ -2029,13 +2053,13 @@ describe("the faces behind a row's votes", () => {
   });
 
   it("reads naturally for the small cases", () => {
-    const { rerender } = render(<QueueList tracks={[withVoters([{ name: "Amyr" }], 1)]} />);
+    const { rerender } = render(<QueueList tracks={[withVoters([{ name: "Amyr", avatarUrl: null }], 1)]} />);
     expect(screen.getByText("Amyr")).toBeInTheDocument();
-    rerender(<QueueList tracks={[withVoters([{ name: "Amyr" }, { name: "Nathan" }], 2)]} />);
+    rerender(<QueueList tracks={[withVoters([{ name: "Amyr", avatarUrl: null }, { name: "Nathan", avatarUrl: null }], 2)]} />);
     expect(screen.getByText("Amyr and Nathan")).toBeInTheDocument();
-    rerender(<QueueList tracks={[withVoters([{ name: "Amyr" }, { name: null }], 2)]} />);
+    rerender(<QueueList tracks={[withVoters([{ name: "Amyr", avatarUrl: null }, { name: null, avatarUrl: null }], 2)]} />);
     expect(screen.getByText("Amyr and 1 other")).toBeInTheDocument();
-    rerender(<QueueList tracks={[withVoters([{ name: null }], 1)]} />);
+    rerender(<QueueList tracks={[withVoters([{ name: null, avatarUrl: null }], 1)]} />);
     expect(screen.getByText("1 guest voted")).toBeInTheDocument();
     rerender(<QueueList tracks={[withVoters([], 0)]} />);
     expect(screen.queryByText(/voted/)).not.toBeInTheDocument();
@@ -2049,6 +2073,8 @@ describe("auto-advance in the booth", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      djAvatarUrl: null,
+      djTagline: "",
       tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: "2026-08-26T00:00:00.000Z",
@@ -2142,6 +2168,8 @@ describe("auto-advance timing", () => {
       id: "ABC123",
       name: "Room",
       djName: "DJ Owl",
+      djAvatarUrl: null,
+      djTagline: "",
       tipLinks: { cashApp: null, venmo: null },
       venue: "",
       createdAt: "2026-08-26T00:00:00.000Z",
@@ -2310,7 +2338,7 @@ describe("fitting faces to the screen", () => {
       },
     );
     try {
-      const voters = Array.from({ length: 20 }, (_, index) => ({ name: `Guest ${index}` }));
+      const voters = Array.from({ length: 20 }, (_, index) => ({ name: `Guest ${index}`, avatarUrl: null }));
       render(<QueueList tracks={[{ ...tracks[0], votes: 25, voters }]} />);
 
       const stack = screen.getByRole("group", { name: /voted by/i });

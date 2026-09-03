@@ -1,4 +1,5 @@
 import { getDatabase } from "@/lib/db";
+import { avatarUrlFor } from "@/lib/profile";
 import type { ProviderId } from "@/lib/providers/types";
 import {
   normalizeTipHandles,
@@ -45,8 +46,12 @@ export type TrackSource = {
   uploaderName: string;
 };
 
-/** A pseudonym when the voter has an account; null for a free anonymous vote. */
-export type TrackVoter = { name: string | null };
+/**
+ * A pseudonym when the voter has an account; null for a free anonymous vote.
+ * The picture rides along with the name and is null when there is none — an
+ * account that never set one, or an anonymous vote.
+ */
+export type TrackVoter = { name: string | null; avatarUrl: string | null };
 
 // Voting is the social act in the room, so the faces are the point: send
 // enough that a phone can fill its width with them and a wide screen can show
@@ -69,6 +74,8 @@ export type PublicSession = {
   id: string;
   name: string;
   djName: string;
+  djAvatarUrl: string | null;
+  djTagline: string;
   tipLinks: TipLinks;
   venue: string;
   createdAt: string;
@@ -93,6 +100,8 @@ type SessionRow = {
   id: string;
   name: string;
   dj_name: string;
+  dj_avatar_key: string | null;
+  dj_tagline: string;
   cash_app_handle: string | null;
   venmo_handle: string | null;
   venue: string;
@@ -169,7 +178,11 @@ const liveVotesJoinSql = `
     SELECT track_id, created_at FROM anonymous_votes WHERE session_id = ?
   ) v ON v.track_id = t.id AND v.created_at > COALESCE(t.played_at, '')`;
 
-type VoterRow = { track_id: string; name: string | null };
+type VoterRow = {
+  track_id: string;
+  name: string | null;
+  avatar_key: string | null;
+};
 
 // The faces on each row. Named voters come first — anonymous voters are all
 // the same blank bubble, so five of them would tell the room nothing — and
@@ -182,18 +195,19 @@ function getTrackVoters(sessionId: string) {
   // row only for all but five per track to be thrown away.
   const rows = getDatabase()
     .prepare(
-      `SELECT track_id, name FROM (
-         SELECT v.track_id, v.name,
+      `SELECT track_id, name, avatar_key FROM (
+         SELECT v.track_id, v.name, v.avatar_key,
                 ROW_NUMBER() OVER (
                   PARTITION BY v.track_id
                   ORDER BY (v.name IS NULL) ASC, v.created_at DESC
                 ) AS rank
          FROM (
-           SELECT vo.track_id, vo.created_at, a.pseudonym AS name
+           SELECT vo.track_id, vo.created_at, a.pseudonym AS name,
+                  a.avatar_key AS avatar_key
            FROM votes vo JOIN accounts a ON a.id = vo.account_id
            WHERE vo.session_id = ?
            UNION ALL
-           SELECT av.track_id, av.created_at, NULL AS name
+           SELECT av.track_id, av.created_at, NULL AS name, NULL AS avatar_key
            FROM anonymous_votes av WHERE av.session_id = ?
          ) v
          JOIN tracks t ON t.id = v.track_id
@@ -206,7 +220,7 @@ function getTrackVoters(sessionId: string) {
   const voters = new Map<string, TrackVoter[]>();
   for (const row of rows) {
     const list = voters.get(row.track_id) ?? [];
-    list.push({ name: row.name });
+    list.push({ name: row.name, avatarUrl: avatarUrlFor(row.avatar_key) });
     voters.set(row.track_id, list);
   }
   return voters;
@@ -225,23 +239,31 @@ function voteStamp(playedAt: string | null) {
 // One face per person, whichever songs they voted for, ordered like a row's
 // faces: named first, then whoever voted most recently. Counted the same way
 // as guest_count so the "+N" always adds up.
-function getRoomVoters(sessionId: string) {
-  return getDatabase()
+function getRoomVoters(sessionId: string): TrackVoter[] {
+  const rows = getDatabase()
     .prepare(
-      `SELECT name FROM (
-         SELECT a.pseudonym AS name, MAX(vo.created_at) AS last_at
+      `SELECT name, avatar_key FROM (
+         SELECT a.pseudonym AS name, a.avatar_key AS avatar_key,
+                MAX(vo.created_at) AS last_at
          FROM votes vo JOIN accounts a ON a.id = vo.account_id
          WHERE vo.session_id = ?
          GROUP BY vo.account_id
          UNION ALL
-         SELECT NULL AS name, MAX(av.created_at) AS last_at
+         SELECT NULL AS name, NULL AS avatar_key, MAX(av.created_at) AS last_at
          FROM anonymous_votes av WHERE av.session_id = ?
          GROUP BY av.voter_id
        )
        ORDER BY (name IS NULL) ASC, last_at DESC
        LIMIT ?`,
     )
-    .all(sessionId, sessionId, roomVoterPreviewLimit) as TrackVoter[];
+    .all(sessionId, sessionId, roomVoterPreviewLimit) as Array<{
+    name: string | null;
+    avatar_key: string | null;
+  }>;
+  return rows.map((row) => ({
+    name: row.name,
+    avatarUrl: avatarUrlFor(row.avatar_key),
+  }));
 }
 
 /**
@@ -311,7 +333,9 @@ function getPublicSession(sessionId: string, accountId?: string) {
   return database.transaction(() => {
     const session = database
       .prepare(
-        `SELECT s.id, s.name, a.pseudonym AS dj_name, s.cash_app_handle,
+        `SELECT s.id, s.name, a.pseudonym AS dj_name,
+                a.avatar_key AS dj_avatar_key, a.tagline AS dj_tagline,
+                s.cash_app_handle,
                 s.venmo_handle, s.venue, s.created_at,
                 s.expires_at, s.ended_at, s.revision,
                 s.now_playing_track_id, s.now_playing_started_at
@@ -387,6 +411,8 @@ function getPublicSession(sessionId: string, accountId?: string) {
       id: session.id,
       name: session.name,
       djName: session.dj_name,
+      djAvatarUrl: avatarUrlFor(session.dj_avatar_key),
+      djTagline: session.dj_tagline,
       tipLinks: tipLinksFor({
         cashApp: session.cash_app_handle,
         venmo: session.venmo_handle,

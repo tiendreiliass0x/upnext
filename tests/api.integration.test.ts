@@ -163,7 +163,10 @@ describe("room conditional requests", () => {
     const tag = first.headers.get("etag");
     expect(first.status).toBe(200);
     expect(tag).toBeTruthy();
-    expect(tag).toMatch(new RegExp(`^"${created.session.id}-v3-`));
+    // Pinned on purpose: adding a field to PublicSession without bumping this
+    // lets a tag from the previous deployment answer 304 for a body it never
+    // held. v4 added the faces' pictures and the host's picture and tagline.
+    expect(tag).toMatch(new RegExp(`^"${created.session.id}-v4-`));
 
     const repeated = await roomRequest(created.session.id, {
       token: host.token,

@@ -16,6 +16,7 @@ import {
   ArrowRight,
   ArrowUp,
   AudioLines,
+  Camera,
   Check,
   CircleDollarSign,
   Copy,
@@ -29,6 +30,7 @@ import {
   Radio,
   RotateCcw,
   Share2,
+  Trash2,
   Upload,
   UserRound,
   UsersRound,
@@ -39,6 +41,13 @@ import type { PublicAccount } from "@/lib/accounts";
 import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
 import { fetchWithTimeout, readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
+import { maximumAvatarBytes } from "@/lib/images";
+import {
+  pseudonymError,
+  pseudonymLimits,
+  taglineError,
+  taglineLimit,
+} from "@/lib/profile";
 import { previewSeconds } from "@/lib/preview";
 import {
   providerLabels,
@@ -521,6 +530,7 @@ export default function Dashboard({
     "loading" | "needed" | "ready"
   >("loading");
   const [identityError, setIdentityError] = useState("");
+  const [isProfileOpen, setIsProfileOpen] = useState(false);
   const retryNowRef = useRef<(() => void) | null>(null);
   const [votedTrackIds, setVotedTrackIds] = useState<Set<string>>(new Set());
   const [pendingVotes, setPendingVotes] = useState<Set<string>>(new Set());
@@ -1031,6 +1041,60 @@ export default function Dashboard({
     }
 
     await finishIdentity({ account: data.account, token: data.token });
+  }
+
+  /**
+   * Save the text half of the profile. Only what the form touched is sent,
+   * and the account the server hands back replaces the one held here — so
+   * the header, the preview room and the next room this account hosts all
+   * read the new name from one place.
+   */
+  async function saveProfile(changes: {
+    pseudonym?: string;
+    tagline?: string;
+  }) {
+    const response = await fetchWithTimeout("/api/accounts", {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accountToken}`,
+      },
+      body: JSON.stringify(changes),
+    });
+    const data = await readJson<{ account?: PublicAccount; error?: string }>(
+      response,
+    );
+    if (!response.ok || !data.account) {
+      throw new Error(data.error || "Your profile could not be saved.");
+    }
+    setAccount(data.account);
+  }
+
+  /** A new picture, or `null` to go back to the lettered bubble. */
+  async function saveAvatar(file: File | null) {
+    let body: FormData | undefined;
+    if (file) {
+      body = new FormData();
+      body.append("file", file);
+    }
+    const response = await fetchWithTimeout(
+      "/api/accounts/avatar",
+      {
+        method: file ? "POST" : "DELETE",
+        headers: { Authorization: `Bearer ${accountToken}` },
+        body,
+      },
+      // A picture goes up over the same venue wifi a set does, so it gets
+      // more than the default eight seconds before it is called stalled.
+      30000,
+    );
+    const data = await readJson<{ account?: PublicAccount; error?: string }>(
+      response,
+    );
+    if (!response.ok || !data.account) {
+      throw new Error(data.error || "Your picture could not be saved.");
+    }
+    setAccount(data.account);
   }
 
   async function addFiles(files: FileList | File[]) {
@@ -1627,6 +1691,8 @@ export default function Dashboard({
     id: "PREVIEW",
     name: sessionName || "Untitled session",
     djName: account?.pseudonym ?? "DJ",
+    djAvatarUrl: account?.avatarUrl ?? null,
+    djTagline: account?.tagline ?? "",
     tipLinks: { cashApp: null, venmo: null },
     venue,
     createdAt: "",
@@ -1711,13 +1777,20 @@ export default function Dashboard({
             </Link>
           )}
           {account ? (
-            <span
-              className="profile-chip"
-              title={`Signed in as ${account.pseudonym}, phone ending ${account.phoneLast4}`}
+            <button
+              type="button"
+              className="profile-chip is-editable"
+              onClick={() => setIsProfileOpen(true)}
+              aria-haspopup="dialog"
+              aria-label={`Edit your profile. Signed in as ${account.pseudonym}, phone ending ${account.phoneLast4}`}
             >
-              <span>{account.pseudonym.slice(0, 1).toUpperCase()}</span>
+              <Avatar
+                className="profile-chip-face"
+                name={account.pseudonym}
+                avatarUrl={account.avatarUrl}
+              />
               <strong>{account.pseudonym}</strong>
-            </span>
+            </button>
           ) : (
             <span className="profile-chip" title="Anonymous browser voter">
               <span>{anonymousVoteUsed ? "1" : "0"}</span>
@@ -1829,6 +1902,15 @@ export default function Dashboard({
           onVote={voteForTrack}
           onAudition={auditionTrack}
           onBackToDJ={() => setView("dj")}
+        />
+      )}
+
+      {isProfileOpen && account && (
+        <ProfileSheet
+          account={account}
+          onSave={saveProfile}
+          onSaveAvatar={saveAvatar}
+          onClose={() => setIsProfileOpen(false)}
         />
       )}
     </div>
@@ -2243,7 +2325,7 @@ function DJSetup({
                 </span>
               </label>
 
-              <div className="setup-finalize" aria-labelledby="tips-title">
+              <section className="setup-finalize" aria-labelledby="tips-title">
                 <div className="section-heading">
                   <h2 id="tips-title">Let the crowd tip you</h2>
                   <p>
@@ -2317,21 +2399,7 @@ function DJSetup({
                     </small>
                   </span>
                 </label>
-                <div className="setup-launch-action">
-                  <button
-                    type="button"
-                    className="primary-button launch-button"
-                    onClick={onStart}
-                    disabled={launchDisabled}
-                  >
-                    <span>{launchLabel}</span>
-                    <ArrowRight size={20} />
-                  </button>
-                  <small className="launch-note">
-                    Your music is stored privately and only streams inside the session.
-                  </small>
-                </div>
-              </div>
+              </section>
 
               {tracks.length > 0 ? (
                 <div className="draft-list">
@@ -2403,21 +2471,18 @@ function DJSetup({
               </span>
             )}
           </div>
-          <div className="desktop-launch-action">
-            <button
-              type="button"
-              className="primary-button launch-button"
-              aria-label="Start session from summary"
-              onClick={onStart}
-              disabled={launchDisabled}
-            >
-              <span>{launchLabel}</span>
-              <ArrowRight size={20} />
-            </button>
-            <small className="launch-note">
-              Your music is stored privately and only streams inside the session.
-            </small>
-          </div>
+          <button
+            type="button"
+            className="primary-button launch-button"
+            onClick={onStart}
+            disabled={launchDisabled}
+          >
+            <span>{launchLabel}</span>
+            <ArrowRight size={20} />
+          </button>
+          <small className="launch-note">
+            Your music is stored privately and only streams inside the session.
+          </small>
         </aside>
       </div>
     </main>
@@ -2902,6 +2967,317 @@ function TipSheet({
   );
 }
 
+/**
+ * The longest side a picked picture is shrunk to before it is sent.
+ *
+ * A face is drawn at 30 pixels in the header and 72 in the sheet, so this is
+ * already generous, and it is what makes the upload cheap in both directions:
+ * a phone camera's original is several megabytes to send and tens of
+ * megabytes for every guest's browser to decode for one small circle.
+ */
+const avatarUploadSide = 512;
+
+/**
+ * Shrink a picked picture, or hand back the original when this browser
+ * cannot. Canvas is missing in some environments and can refuse to export a
+ * blob; either way the file still goes as chosen and the route's own limits
+ * decide, so this is an optimisation and never the check.
+ */
+export async function prepareAvatarFile(file: File): Promise<File> {
+  if (typeof document === "undefined" || typeof createImageBitmap !== "function") {
+    return file;
+  }
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await createImageBitmap(file);
+    const scale = Math.min(
+      1,
+      avatarUploadSide / Math.max(bitmap.width, bitmap.height),
+    );
+    // Already small enough: re-encoding would only lose quality.
+    if (scale >= 1) return file;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => {
+      if (typeof canvas.toBlob !== "function") {
+        resolve(null);
+        return;
+      }
+      canvas.toBlob((result) => resolve(result), "image/jpeg", 0.9);
+    });
+    if (!blob || blob.size === 0) return file;
+    return new File([blob], "avatar.jpg", { type: "image/jpeg" });
+  } catch {
+    return file;
+  } finally {
+    bitmap?.close();
+  }
+}
+
+/**
+ * The profile, as its owner edits it.
+ *
+ * The picture saves the moment one is picked and the text saves on submit.
+ * That split is deliberate: choosing a file is already the decision, whereas
+ * a half-typed name is not, and it keeps the preview in the sheet showing
+ * what the room sees rather than what this browser happens to hold.
+ */
+function ProfileSheet({
+  account,
+  onSave,
+  onSaveAvatar,
+  onClose,
+}: {
+  account: PublicAccount;
+  onSave: (changes: { pseudonym?: string; tagline?: string }) => Promise<void>;
+  onSaveAvatar: (file: File | null) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [pseudonym, setPseudonym] = useState(account.pseudonym);
+  const [tagline, setTagline] = useState(account.tagline);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isPictureSaving, setIsPictureSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [notice, setNotice] = useState("");
+  const sheetRef = useRef<HTMLElement | null>(null);
+  const closeRef = useRef<HTMLButtonElement | null>(null);
+  const closeSheet = useEffectEvent(onClose);
+
+  useEffect(() => {
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const app = document.querySelector<HTMLElement>(".upnext-app");
+    const wasInert = app?.inert ?? false;
+    if (app) app.inert = true;
+    closeRef.current?.focus();
+
+    function keepFocusInSheet(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeSheet();
+        return;
+      }
+      if (event.key !== "Tab" || !sheetRef.current) return;
+      const focusable = Array.from(
+        sheetRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      } else if (!sheetRef.current.contains(document.activeElement)) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", keepFocusInSheet);
+    return () => {
+      window.removeEventListener("keydown", keepFocusInSheet);
+      if (app) app.inert = wasInert;
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
+  const nameMessage = pseudonymError(pseudonym);
+  const taglineMessage = taglineError(tagline);
+  const isChanged =
+    pseudonym.trim() !== account.pseudonym || tagline.trim() !== account.tagline;
+  const isBusy = isSaving || isPictureSaving;
+
+  async function changePicture(picked: File | null) {
+    setFormError("");
+    setNotice("");
+    setIsPictureSaving(true);
+    try {
+      // Shrunk first: a phone camera's original is several megabytes and far
+      // more pixels than a 72-pixel circle can use, and both cost the guests
+      // who load it as much as the person who sent it.
+      const file = picked ? await prepareAvatarFile(picked) : null;
+      if (file && file.size > maximumAvatarBytes) {
+        // Refused here rather than after the upload: on venue wifi that is a
+        // minute of waiting for a 413.
+        setFormError("Profile pictures must be smaller than 2 MB.");
+        return;
+      }
+      await onSaveAvatar(file);
+      setNotice(file ? "Picture updated." : "Picture removed.");
+    } catch (pictureError) {
+      setFormError(getErrorMessage(pictureError));
+    } finally {
+      setIsPictureSaving(false);
+    }
+  }
+
+  async function submitProfile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (nameMessage || taglineMessage) {
+      setFormError(nameMessage ?? taglineMessage ?? "");
+      return;
+    }
+    setIsSaving(true);
+    setFormError("");
+    setNotice("");
+    try {
+      // Only what this form actually changed. Sending both every time lets a
+      // tab left open overwrite a field it was never asked to touch, with the
+      // value it happened to load.
+      await onSave({
+        ...(pseudonym.trim() !== account.pseudonym
+          ? { pseudonym: pseudonym.trim() }
+          : {}),
+        ...(tagline.trim() !== account.tagline
+          ? { tagline: tagline.trim() }
+          : {}),
+      });
+      setNotice("Profile saved.");
+    } catch (saveError) {
+      setFormError(getErrorMessage(saveError));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return createPortal(
+    <div
+      className="tip-sheet-backdrop"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section
+        ref={sheetRef}
+        className="tip-sheet profile-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="profile-sheet-title"
+      >
+        <button
+          type="button"
+          ref={closeRef}
+          className="tip-sheet-close"
+          onClick={onClose}
+          aria-label="Close profile"
+        >
+          <X size={18} />
+        </button>
+        <span className="tip-sheet-eyebrow">Your profile</span>
+        <h2 id="profile-sheet-title">How the room sees you</h2>
+
+        <div className="profile-picture">
+          <Avatar
+            className="profile-picture-face"
+            name={account.pseudonym}
+            avatarUrl={account.avatarUrl}
+            title={account.pseudonym}
+          />
+          <div className="profile-picture-actions">
+            <label
+              className={`secondary-button${isBusy ? " is-disabled" : ""}`}
+            >
+              <Camera size={15} aria-hidden="true" />
+              <span>
+                {account.avatarUrl ? "Change picture" : "Add a picture"}
+              </span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                disabled={isBusy}
+                onChange={(event) => {
+                  const file = event.target.files?.[0] ?? null;
+                  event.target.value = "";
+                  if (file) void changePicture(file);
+                }}
+              />
+            </label>
+            {account.avatarUrl && (
+              <button
+                type="button"
+                className="link-button"
+                disabled={isBusy}
+                onClick={() => void changePicture(null)}
+              >
+                <Trash2 size={14} aria-hidden="true" /> Remove
+              </button>
+            )}
+            <small>PNG, JPEG, WebP or GIF, up to 2 MB.</small>
+          </div>
+        </div>
+
+        <form className="profile-form" onSubmit={submitProfile}>
+          <label className="field">
+            <span>Username</span>
+            <input
+              type="text"
+              value={pseudonym}
+              onChange={(event) => setPseudonym(event.target.value)}
+              autoComplete="nickname"
+              minLength={pseudonymLimits.minimum}
+              maxLength={pseudonymLimits.maximum}
+              aria-invalid={Boolean(nameMessage)}
+              required
+            />
+            {nameMessage ? (
+              <small className="field-error">{nameMessage}</small>
+            ) : (
+              <small>
+                This is the name on every room you host and beside every vote
+                you cast.
+              </small>
+            )}
+          </label>
+          <label className="field">
+            <span>Tagline</span>
+            <input
+              type="text"
+              value={tagline}
+              onChange={(event) => setTagline(event.target.value)}
+              placeholder="Resident at Room 02"
+              maxLength={taglineLimit}
+              aria-invalid={Boolean(taglineMessage)}
+            />
+            {taglineMessage ? (
+              <small className="field-error">{taglineMessage}</small>
+            ) : (
+              <small>Optional. One line the crowd sees in your rooms.</small>
+            )}
+          </label>
+          <p className="profile-phone">
+            Phone ending {account.phoneLast4}. This is how you log back in, so
+            it cannot be changed here.
+          </p>
+          {formError && (
+            <p className="form-error" role="alert">
+              {formError}
+            </p>
+          )}
+          <p className="profile-notice" role="status">
+            {notice}
+          </p>
+          <button
+            type="submit"
+            className="primary-button"
+            disabled={isBusy || !isChanged || Boolean(nameMessage || taglineMessage)}
+          >
+            {isSaving ? "Saving..." : "Save profile"}
+            <Check size={18} />
+          </button>
+        </form>
+      </section>
+    </div>,
+    document.body,
+  );
+}
+
 function GuestRoom({
   session,
   isPreview,
@@ -2977,6 +3353,21 @@ function GuestRoom({
             <span /> {isPreview ? "Crowd preview" : `Live · ${session.djName} Radio`}
           </span>
           <h1>{session.name}</h1>
+          {/* Who is spinning, with a face. The pill above carries the name as
+              a status line; this is the introduction, and it is where a
+              tagline the DJ wrote belongs. */}
+          <p className="guest-host">
+            <Avatar
+              className="guest-host-face"
+              name={session.djName}
+              avatarUrl={session.djAvatarUrl}
+              title={session.djName}
+            />
+            <span>
+              <strong>{session.djName}</strong>
+              {session.djTagline && <small>{session.djTagline}</small>}
+            </span>
+          </p>
           <p>
             {isPreview
               ? "This is what guests see after scanning your QR."
@@ -3090,6 +3481,55 @@ function voterHue(name: string) {
   return hash % 360;
 }
 
+/**
+ * One person's face: their picture when they have one, the first letter of
+ * their name when they do not, and a blank bubble for an anonymous vote.
+ *
+ * One component for every stack it appears in, so the class the caller passes
+ * keeps the existing sizing and the fallback never drifts between the header,
+ * a row's votes and the room's crowd.
+ */
+export function Avatar({
+  name,
+  avatarUrl,
+  className,
+  title,
+}: {
+  name: string | null;
+  avatarUrl: string | null;
+  className: string;
+  title?: string;
+}) {
+  const label = title ?? name ?? "Guest";
+  if (avatarUrl) {
+    return (
+      <span className={`${className} has-picture`} title={label}>
+        {/* A plain img, not next/image: the file is behind a signed redirect
+            on our own origin, which the optimiser cannot fetch or cache. The
+            alt is empty because the name is already announced beside it. */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={avatarUrl} alt="" loading="lazy" decoding="async" />
+      </span>
+    );
+  }
+  if (!name) {
+    return (
+      <span className={`${className} is-anonymous`} title={label}>
+        <UserRound size={11} strokeWidth={2.4} />
+      </span>
+    );
+  }
+  return (
+    <span
+      className={className}
+      style={{ "--face-hue": voterHue(name) } as CSSProperties}
+      title={label}
+    >
+      {name.slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
 function voterSummary(voters: TrackVoter[], votes: number) {
   const names = voters.flatMap((voter) => (voter.name ? [voter.name] : []));
   const shown = names.slice(0, 2);
@@ -3180,22 +3620,14 @@ function VoterStack({
       aria-label={`${label} ${voterSummary(voters, votes)}`}
     >
       <span className="voter-faces" aria-hidden="true">
-        {shown.map((voter, index) =>
-          voter.name ? (
-            <span
-              key={index}
-              className="voter-face"
-              style={{ "--face-hue": voterHue(voter.name) } as CSSProperties}
-              title={voter.name}
-            >
-              {voter.name.slice(0, 1).toUpperCase()}
-            </span>
-          ) : (
-            <span key={index} className="voter-face is-anonymous" title="Guest">
-              <UserRound size={11} strokeWidth={2.4} />
-            </span>
-          ),
-        )}
+        {shown.map((voter, index) => (
+          <Avatar
+            key={index}
+            className="voter-face"
+            name={voter.name}
+            avatarUrl={voter.avatarUrl}
+          />
+        ))}
         {hidden > 0 && <span className="voter-face is-more">+{hidden}</span>}
       </span>
       <small>{voterSummary(voters, votes)}</small>

@@ -33,6 +33,12 @@ export function getDatabase() {
       phone TEXT NOT NULL UNIQUE,
       pseudonym TEXT NOT NULL,
       auth_token TEXT NOT NULL UNIQUE,
+      -- The R2 key of the profile picture, or NULL for the initial bubble.
+      -- Unlike an upload this has no row of its own: one account holds at
+      -- most one, and replacing it deletes the object it replaces.
+      avatar_key TEXT,
+      -- A line the DJ writes about themselves, shown to the room.
+      tagline TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -279,6 +285,21 @@ export function getDatabase() {
     END;
   `);
 
+  const accountColumns = database.pragma("table_info(accounts)") as Array<{
+    name: string;
+  }>;
+  if (!accountColumns.some((column) => column.name === "avatar_key")) {
+    // Both columns or neither. The check above only asks about avatar_key, so
+    // a process that died between the two statements would come back up
+    // skipping this block with no tagline column -- and every account read
+    // names that column, so nothing would work again.
+    database.exec(`
+      BEGIN;
+      ALTER TABLE accounts ADD COLUMN avatar_key TEXT;
+      ALTER TABLE accounts ADD COLUMN tagline TEXT NOT NULL DEFAULT '';
+      COMMIT;
+    `);
+  }
   const sessionColumns = database.pragma("table_info(sessions)") as Array<{
     name: string;
   }>;
@@ -341,7 +362,14 @@ export function getDatabase() {
   database.exec(
     "UPDATE library_tracks SET preview_key = NULL WHERE preview_key LIKE 'previews/%'",
   );
+  // After the ALTER above, not with the other indexes: on a database that
+  // predates avatar_key the column does not exist when that block runs.
   database.exec(`
+    -- The public avatar route asks whether a key is still someone's picture
+    -- before it signs a read, and a room draws a face per vote. Partial:
+    -- most accounts have no picture and those rows are never the answer.
+    CREATE INDEX IF NOT EXISTS accounts_avatar_key_idx
+      ON accounts(avatar_key) WHERE avatar_key IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS sessions_host_request_idx
       ON sessions(host_account_id, request_id)
       WHERE request_id IS NOT NULL;

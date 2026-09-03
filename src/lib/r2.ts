@@ -1,3 +1,8 @@
+/**
+ * The bucket. "Preview" in these names is historical, like `preview_key` in
+ * the schema: they are the object primitives, and everything this app stores
+ * goes through them — full songs and profile pictures alike.
+ */
 import type { Readable } from "node:stream";
 import {
   DeleteObjectCommand,
