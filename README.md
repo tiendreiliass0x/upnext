@@ -406,8 +406,11 @@ do none of that.
 ## Cleanup
 
 Ended and expired rooms, their tracks and votes, and the R2 previews they held
-open are all reclaimed by `bun run cleanup`. Nothing removes them otherwise, so
-schedule it — an hourly cron entry or systemd timer next to the app process is
+open are all reclaimed by `bun run cleanup`. A room the DJ opted to keep open
+has no expiry to fall past, so it is measured by silence instead: nothing
+played and nobody voting for a month closes it like any other, and it is then
+deleted on the same retention schedule. A room still being used stays, however
+old it is. Nothing removes any of this otherwise, so schedule it — an hourly cron entry or systemd timer next to the app process is
 enough:
 
 ```
@@ -451,10 +454,12 @@ counts and booleans only; failure output is withheld unless
 The URL is a credential — it lives in `.env`, is never logged, and `--status`
 shows only its host.
 
-Retention is controlled by `CLEANUP_ROOM_RETENTION_HOURS` and
+Retention is controlled by `CLEANUP_ROOM_RETENTION_HOURS`,
 `CLEANUP_UPLOAD_GRACE_HOURS` (the grace period covers a DJ who uploaded previews
-but has not opened the room yet). Both ship set to 24 hours in `.env.example`;
-with neither set the built-in fallbacks are 7 days and 24 hours. The command prints a JSON summary and
+but has not opened the room yet) and `CLEANUP_KEEP_OPEN_IDLE_HOURS` (how long a
+kept-open room may sit untouched before it is closed). The first two ship set to
+24 hours in `.env.example`; with none set the built-in fallbacks are 7 days,
+24 hours and 30 days. The command prints a JSON summary and
 exits non-zero when any object could not be deleted.
 
 Objects are always removed from R2 before their database row, so an interrupted

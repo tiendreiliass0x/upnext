@@ -194,8 +194,8 @@ describe("cleanup", () => {
   it("leaves an opted-in room live after its normal expiry", async () => {
     seedRoom({
       id: "KEEPOP",
-      createdAt: ago(24 * 30),
-      expiresAt: ago(24 * 29),
+      createdAt: ago(24 * 3),
+      expiresAt: ago(24 * 2),
       keepOpen: true,
     });
 
@@ -205,6 +205,51 @@ describe("cleanup", () => {
     expect(
       getDatabase()
         .prepare("SELECT ended_at FROM sessions WHERE id = 'KEEPOP'")
+        .get(),
+    ).toEqual({ ended_at: null });
+  });
+
+  it("closes an opted-in room that has gone quiet for a month", async () => {
+    // Opened, played nothing since, voted on by nobody: the DJ who ticked the
+    // box is not coming back, and until it closes it holds its previews.
+    seedRoom({
+      id: "SILENT",
+      createdAt: ago(24 * 31),
+      expiresAt: ago(24 * 30),
+      keepOpen: true,
+    });
+
+    const summary = await runCleanup({ now });
+
+    expect(summary.closedRooms).toBe(1);
+    expect(
+      getDatabase()
+        .prepare("SELECT ended_at FROM sessions WHERE id = 'SILENT'")
+        .get(),
+    ).toEqual({ ended_at: now.toISOString() });
+  });
+
+  it("keeps an opted-in room that is old but still being voted in", async () => {
+    seedRoom({
+      id: "BUSY",
+      createdAt: ago(24 * 90),
+      expiresAt: ago(24 * 89),
+      keepOpen: true,
+    });
+    seedTrack({ id: "busy-track", sessionId: "BUSY" });
+    getDatabase()
+      .prepare(
+        `INSERT INTO votes (track_id, session_id, account_id, created_at)
+         VALUES ('busy-track', 'BUSY', 'host', ?)`,
+      )
+      .run(ago(2));
+
+    const summary = await runCleanup({ now });
+
+    expect(summary.closedRooms).toBe(0);
+    expect(
+      getDatabase()
+        .prepare("SELECT ended_at FROM sessions WHERE id = 'BUSY'")
         .get(),
     ).toEqual({ ended_at: null });
   });

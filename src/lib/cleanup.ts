@@ -4,6 +4,7 @@ import { deletePreviews } from "@/lib/r2";
 const hour = 60 * 60 * 1000;
 const defaultRoomRetentionHours = 24 * 7;
 const defaultUploadGraceHours = 24;
+const defaultKeepOpenIdleHours = 24 * 30;
 const accountRequestRetentionHours = 24;
 
 export type CleanupSummary = {
@@ -40,6 +41,15 @@ export async function runCleanup(options: { now?: Date } = {}) {
   const roomCutoff = new Date(
     now.getTime() - readHours("CLEANUP_ROOM_RETENTION_HOURS", defaultRoomRetentionHours) * hour,
   ).toISOString();
+  // A room held open has no expiry to fall past, so it is measured by silence
+  // instead: nothing played, nobody voted, for long enough that the DJ who
+  // ticked the box is plainly not coming back. Without this it is the one
+  // room that is never closed, never deleted and never gives its previews
+  // back, and any account can open as many as it likes.
+  const keepOpenCutoff = new Date(
+    now.getTime() -
+      readHours("CLEANUP_KEEP_OPEN_IDLE_HOURS", defaultKeepOpenIdleHours) * hour,
+  ).toISOString();
   const uploadCutoff = new Date(
     now.getTime() - readHours("CLEANUP_UPLOAD_GRACE_HOURS", defaultUploadGraceHours) * hour,
   ).toISOString();
@@ -73,9 +83,21 @@ export async function runCleanup(options: { now?: Date } = {}) {
       summary.closedRooms = database
         .prepare(
           `UPDATE sessions SET ended_at = @nowIso
-           WHERE ended_at IS NULL AND keep_open = 0 AND expires_at <= @nowIso`,
+           WHERE ended_at IS NULL AND (
+             (keep_open = 0 AND expires_at <= @nowIso)
+             OR (keep_open = 1 AND @keepOpenCutoff >= MAX(
+                  created_at,
+                  COALESCE(now_playing_started_at, ''),
+                  COALESCE(
+                    (SELECT MAX(created_at) FROM votes
+                     WHERE session_id = sessions.id), ''),
+                  COALESCE(
+                    (SELECT MAX(created_at) FROM anonymous_votes
+                     WHERE session_id = sessions.id), '')
+                ))
+           )`,
         )
-        .run({ nowIso }).changes;
+        .run({ nowIso, keepOpenCutoff }).changes;
 
       const countIn = (table: string) =>
         (
