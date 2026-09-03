@@ -63,6 +63,15 @@ export function normalizePhone(phone: string) {
   return `+${digits}`;
 }
 
+/**
+ * Newest accounts first, capped. Anyone can register, so the row count is not
+ * bounded by anything an operator controls, and each row carries six
+ * correlated subqueries on a synchronous database handle. An uncapped listing
+ * would stall the event loop for every other request the moment the service
+ * became popular, which is the failure playlists.ts:32 already warns about.
+ */
+const accountStatusLimit = 200;
+
 export function listAccountStatuses(): AccountStatus[] {
   const now = new Date().toISOString();
   const rows = getDatabase()
@@ -78,6 +87,9 @@ export function listAccountStatuses(): AccountStatus[] {
                WHERE u.account_id = a.id
                  AND NOT EXISTS (
                    SELECT 1 FROM library_tracks t WHERE t.preview_key = u.object_key
+                 )
+                 AND NOT EXISTS (
+                   SELECT 1 FROM tracks t WHERE t.preview_key = u.object_key
                  )) AS uploads_not_in_library,
               (SELECT COUNT(*) FROM playlists p
                WHERE p.account_id = a.id) AS playlist_count,
@@ -85,9 +97,10 @@ export function listAccountStatuses(): AccountStatus[] {
                WHERE s.host_account_id = a.id AND s.ended_at IS NULL
                  AND (s.keep_open = 1 OR s.expires_at > ?)) AS active_room_count
        FROM accounts a
-       ORDER BY a.created_at DESC`,
+       ORDER BY a.created_at DESC
+       LIMIT ?`,
     )
-    .all(now) as AccountStatusRow[];
+    .all(now, accountStatusLimit) as AccountStatusRow[];
 
   return rows.map((row) => ({
     id: row.id,

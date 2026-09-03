@@ -63,10 +63,10 @@ import SourcePicker from "@/components/SourcePicker";
 import { tipHandleError } from "@/lib/tips";
 import type { NowPlaying, TrackSource } from "@/lib/sessions";
 import type { PublicSession, SessionTrack, TrackVoter } from "@/lib/sessions";
+import { accountTokenStorageKey } from "@/lib/tokens";
 
 type AppView = "dj" | "guest";
 
-const accountTokenStorageKey = "upnext-account-token";
 const accountRequestStorageKey = "upnext-account-request-id";
 const voterIdStorageKey = "upnext-voter-id";
 const anonymousVotesStorageKey = "upnext-anonymous-votes";

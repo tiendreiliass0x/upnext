@@ -98,6 +98,56 @@ describe("catalogue uploads", () => {
     expect(catalogued).toHaveLength(1);
   });
 
+  it("fails only the file the gate refused, and lets the batch go on", async () => {
+    // The gate is two uploads across the whole server, so another account can
+    // hold it. The status check then answers 404 every time: this upload is
+    // not one the server ever started, which is precisely why the file behind
+    // it deserves its own turn rather than being written off unsent.
+    let posts = 0;
+    const { uploadCalls } = mountWithUploads(() => {
+      posts += 1;
+      return posts <= 4
+        ? Response.json(
+            { error: "Uploads are busy. Try again in a moment." },
+            { status: 429, headers: { "Retry-After": "60" } },
+          )
+        : Response.json({ previewKey: "audio/a/second.wav" });
+    });
+
+    // Mounted on real timers, because the file input only appears once the
+    // library list has loaded. The waiting is what needs a fake clock.
+    const input = await waitFor(() => {
+      const node = document.querySelector<HTMLInputElement>(".admin-upload input");
+      if (!node) throw new Error("no file input");
+      return node;
+    });
+    const files = ["Artist - busy.wav", "Artist - after.wav"].map(
+      (name) => new File(["RIFF0000WAVE"], name, { type: "audio/wav" }),
+    );
+    Object.defineProperty(input, "files", { value: files, configurable: true });
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(input);
+      // Past the three-minute ceiling the first file is given, with room for
+      // the second to take its turn.
+      await vi.advanceTimersByTimeAsync(8 * 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await waitFor(
+      () => expect(screen.getByText(/Added 1 song\./)).toBeInTheDocument(),
+      { timeout: 5000 },
+    );
+    const banner = screen.getByRole("alert").textContent ?? "";
+    expect(banner).toContain("1 of 2 could not be added");
+    expect(banner).toContain("Uploads are busy");
+    // What it used to say instead, for every file behind the busy one.
+    expect(banner).not.toContain("not attempted");
+    expect(uploadCalls.length).toBeGreaterThan(4);
+  });
+
   it("retries catalogue attachment without uploading the audio again", async () => {
     let catalogueAttempts = 0;
     const { uploadCalls, catalogued } = mountWithUploads(

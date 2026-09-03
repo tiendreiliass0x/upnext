@@ -186,6 +186,23 @@ export function getDatabase() {
       expires_at TEXT NOT NULL
     );
 
+    -- One upload that is being written to storage right now.
+    --
+    -- The row for a finished upload is written only after the object lands, so
+    -- between the two there is nothing to tell a client whether the file it
+    -- gave up waiting for is still on its way. That question is what decides
+    -- between re-sending sixty megabytes and waiting a few more seconds, and
+    -- answering it from a process-local map answers it wrong the moment a
+    -- second worker takes the asking request. Claimed as the upload starts,
+    -- removed as it settles either way, and stale rows are ignored by age so
+    -- a process that died mid-write cannot wedge the account forever.
+    CREATE TABLE IF NOT EXISTS upload_claims (
+      account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      request_id TEXT NOT NULL,
+      claimed_at TEXT NOT NULL,
+      PRIMARY KEY (account_id, request_id)
+    );
+
     CREATE INDEX IF NOT EXISTS sessions_host_idx
       ON sessions(host_account_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS audio_uploads_account_idx

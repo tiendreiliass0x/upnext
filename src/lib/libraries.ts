@@ -118,6 +118,19 @@ function likePattern(search: string) {
   return `%${search.replace(/[\\%_]/g, (character) => `\\${character}`)}%`;
 }
 
+/**
+ * What an admin listing returns instead of a page.
+ *
+ * The point of `unbounded` is that the person curating the catalogue sees all
+ * of it rather than the first shelf-sized page. A literal `LIMIT -1` reads as
+ * that, but SQLite takes it as no limit at all, and every one of those rows is
+ * serialised and then given its own list item by the console — which is
+ * attached to the admin, the account with the largest catalogue of anyone.
+ * High enough to mean "everything" for a real catalogue, finite enough that
+ * the page cannot be asked to render an unbounded one.
+ */
+export const adminListingLimit = 5000;
+
 export function listLibraryTracks(input: {
   libraryId: string;
   query?: string;
@@ -125,7 +138,7 @@ export function listLibraryTracks(input: {
   unbounded?: boolean;
 }): LibraryTrack[] {
   const limit = input.unbounded
-    ? -1
+    ? adminListingLimit
     : Math.min(Math.max(input.limit ?? 200, 1), 500);
   const search = input.query?.trim() ?? "";
   const database = getDatabase();
@@ -169,7 +182,7 @@ export function searchCatalogue(input: {
   unbounded?: boolean;
 }): CatalogueTrack[] {
   const limit = input.unbounded
-    ? -1
+    ? adminListingLimit
     : Math.min(Math.max(input.limit ?? 100, 1), 200);
   const search = input.query?.trim() ?? "";
   const database = getDatabase();
@@ -239,7 +252,10 @@ export function addLibraryTrack(input: {
              WHERE library_id = ? AND preview_key = ?`,
           )
           .get(input.libraryId, input.previewKey) as { id: string } | undefined;
-        if (existing) return existing.id;
+        // Said, not assumed: the caller cannot tell a retry that landed from
+        // a re-add of the same audio under a corrected title, and reporting
+        // the second as added would claim an edit that never happened.
+        if (existing) return { id: existing.id, created: false };
       }
 
       database
@@ -257,7 +273,7 @@ export function addLibraryTrack(input: {
           input.contributedBy,
           new Date().toISOString(),
         );
-      return id;
+      return { id, created: true };
     })
     .immediate();
 
@@ -267,8 +283,10 @@ export function addLibraryTrack(input: {
       `SELECT id, library_id, title, artist, preview_key, contributed_by, created_at
        FROM library_tracks WHERE id = ?`,
     )
-    .get(inserted) as LibraryTrackRow;
-  return toLibraryTrack(row);
+    .get(inserted.id) as LibraryTrackRow;
+  // The track as every other caller expects it, with one extra field saying
+  // whether this call is what put it there.
+  return { ...toLibraryTrack(row), created: inserted.created };
 }
 
 export function deleteLibraryTrack(id: string) {
