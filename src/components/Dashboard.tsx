@@ -504,6 +504,7 @@ export default function Dashboard({
   const [venue, setVenue] = useState("Room 02");
   const [cashAppHandle, setCashAppHandle] = useState("");
   const [venmoHandle, setVenmoHandle] = useState("");
+  const [keepOpen, setKeepOpen] = useState(false);
   const [draftTracks, setDraftTracks] = useState<DraftTrack[]>([]);
   const [session, setSession] = useState<PublicSession | null>(null);
   const [activeSessionId, setActiveSessionId] = useState(sharedSessionId);
@@ -1212,6 +1213,7 @@ export default function Dashboard({
           venue,
           cashAppHandle,
           venmoHandle,
+          keepOpen,
           requestId: sessionRequestIdRef.current,
           // Only the handle travels for an imported row. The server reads
           // the title, artwork and link back from the service itself, so a
@@ -1750,6 +1752,7 @@ export default function Dashboard({
           venue={venue}
           cashAppHandle={cashAppHandle}
           venmoHandle={venmoHandle}
+          keepOpen={keepOpen}
           tracks={draftTracks}
           isDragging={isDragging}
           isStarting={isStarting}
@@ -1758,6 +1761,7 @@ export default function Dashboard({
           onVenueChange={setVenue}
           onCashAppHandleChange={setCashAppHandle}
           onVenmoHandleChange={setVenmoHandle}
+          onKeepOpenChange={setKeepOpen}
           onAddFiles={addFiles}
           onDragChange={setIsDragging}
           onRemoveTrack={(trackId) =>
@@ -2058,6 +2062,7 @@ type DJSetupProps = {
   venue: string;
   cashAppHandle: string;
   venmoHandle: string;
+  keepOpen: boolean;
   tracks: DraftTrack[];
   isDragging: boolean;
   isStarting: boolean;
@@ -2066,6 +2071,7 @@ type DJSetupProps = {
   onVenueChange: (value: string) => void;
   onCashAppHandleChange: (value: string) => void;
   onVenmoHandleChange: (value: string) => void;
+  onKeepOpenChange: (value: boolean) => void;
   onAddFiles: (files: FileList | File[]) => Promise<void>;
   onDragChange: (value: boolean) => void;
   onRemoveTrack: (trackId: string) => void;
@@ -2081,6 +2087,7 @@ function DJSetup({
   venue,
   cashAppHandle,
   venmoHandle,
+  keepOpen,
   tracks,
   isDragging,
   isStarting,
@@ -2089,6 +2096,7 @@ function DJSetup({
   onVenueChange,
   onCashAppHandleChange,
   onVenmoHandleChange,
+  onKeepOpenChange,
   onAddFiles,
   onDragChange,
   onRemoveTrack,
@@ -2292,6 +2300,23 @@ function DJSetup({
                   Use profiles you own that are eligible to receive business
                   payments.
                 </p>
+                <label className="session-lifetime-toggle">
+                  <input
+                    type="checkbox"
+                    checked={keepOpen}
+                    disabled={isStarting}
+                    onChange={(event) => onKeepOpenChange(event.target.checked)}
+                  />
+                  <span className="toggle-track" aria-hidden="true">
+                    <span />
+                  </span>
+                  <span className="toggle-copy">
+                    <strong>Keep session live until I end it</strong>
+                    <small>
+                      Otherwise, this session closes automatically after 24 hours.
+                    </small>
+                  </span>
+                </label>
                 <div className="setup-launch-action">
                   <button
                     type="button"

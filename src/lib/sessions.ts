@@ -300,7 +300,8 @@ function expireOldSessions() {
   const now = new Date().toISOString();
   getDatabase()
     .prepare(
-      "UPDATE sessions SET ended_at = ? WHERE ended_at IS NULL AND expires_at <= ?",
+      `UPDATE sessions SET ended_at = ?
+       WHERE ended_at IS NULL AND keep_open = 0 AND expires_at <= ?`,
     )
     .run(now, now);
 }
@@ -315,7 +316,8 @@ function getPublicSession(sessionId: string, accountId?: string) {
                 s.expires_at, s.ended_at, s.revision,
                 s.now_playing_track_id, s.now_playing_started_at
          FROM sessions s JOIN accounts a ON a.id = s.host_account_id
-         WHERE s.id = ? AND s.ended_at IS NULL AND s.expires_at > ?`,
+         WHERE s.id = ? AND s.ended_at IS NULL
+           AND (s.keep_open = 1 OR s.expires_at > ?)`,
       )
       .get(sessionId.toUpperCase(), new Date().toISOString()) as
       | SessionRow
@@ -434,6 +436,7 @@ export function createSession(input: {
   venue: string;
   accountId: string;
   requestId?: string | null;
+  keepOpen?: boolean;
   tipHandles?: TipHandles;
   tracks: Array<{
     title: string;
@@ -475,17 +478,20 @@ export function createSession(input: {
         database
           .prepare(
             `UPDATE sessions
-                SET cash_app_handle = ?, venmo_handle = ?,
+                SET cash_app_handle = ?, venmo_handle = ?, keep_open = ?,
                     revision = revision + 1
               WHERE id = ?
-                AND (cash_app_handle IS NOT ? OR venmo_handle IS NOT ?)`,
+                AND (cash_app_handle IS NOT ? OR venmo_handle IS NOT ?
+                     OR keep_open != ?)`,
           )
           .run(
             tipHandles.cashApp,
             tipHandles.venmo,
+            input.keepOpen ? 1 : 0,
             existing.id,
             tipHandles.cashApp,
             tipHandles.venmo,
+            input.keepOpen ? 1 : 0,
           );
         return { id: existing.id, hostKey: existing.host_key };
       }
@@ -499,8 +505,8 @@ export function createSession(input: {
       .prepare(
         `INSERT INTO sessions
           (id, name, venue, host_account_id, host_key, request_id,
-           cash_app_handle, venmo_handle, revision, created_at, expires_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+           cash_app_handle, venmo_handle, keep_open, revision, created_at, expires_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
       )
       .run(
         id,
@@ -513,6 +519,7 @@ export function createSession(input: {
         input.requestId || null,
         tipHandles.cashApp,
         tipHandles.venmo,
+        input.keepOpen ? 1 : 0,
         createdAt,
         expiresAt,
       );
@@ -578,7 +585,8 @@ export function getSessionRevision(id: string) {
   const row = getDatabase()
     .prepare(
       `SELECT id, revision FROM sessions
-       WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+       WHERE id = ? AND ended_at IS NULL
+         AND (keep_open = 1 OR expires_at > ?)`,
     )
     .get(id.toUpperCase(), new Date().toISOString()) as
     | { id: string; revision: number }
@@ -615,7 +623,8 @@ export function getActiveHostSession(accountId: string) {
   const row = getDatabase()
     .prepare(
       `SELECT id, host_key FROM sessions
-       WHERE host_account_id = ? AND ended_at IS NULL AND expires_at > ?
+       WHERE host_account_id = ? AND ended_at IS NULL
+         AND (keep_open = 1 OR expires_at > ?)
        ORDER BY created_at DESC LIMIT 1`,
     )
     .get(accountId, new Date().toISOString()) as
@@ -643,7 +652,8 @@ export function endSession(input: {
       const session = database
         .prepare(
           `SELECT id, host_key, host_account_id FROM sessions
-           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+           WHERE id = ? AND ended_at IS NULL
+             AND (keep_open = 1 OR expires_at > ?)`,
         )
         .get(input.sessionId.toUpperCase(), now) as
         | { id: string; host_key: string; host_account_id: string }
@@ -694,7 +704,8 @@ export function setNowPlaying(input: {
       const session = database
         .prepare(
           `SELECT id, host_key, host_account_id, now_playing_track_id FROM sessions
-           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+           WHERE id = ? AND ended_at IS NULL
+             AND (keep_open = 1 OR expires_at > ?)`,
         )
         .get(input.sessionId.toUpperCase(), now) as
         | {
@@ -793,7 +804,8 @@ export function toggleVote(input: {
       const session = database
         .prepare(
           `SELECT id FROM sessions
-           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+           WHERE id = ? AND ended_at IS NULL
+             AND (keep_open = 1 OR expires_at > ?)`,
         )
         .get(input.sessionId.toUpperCase(), new Date().toISOString()) as
         | { id: string }
@@ -865,7 +877,8 @@ export function castAnonymousVote(input: {
       const session = database
         .prepare(
           `SELECT id FROM sessions
-           WHERE id = ? AND ended_at IS NULL AND expires_at > ?`,
+           WHERE id = ? AND ended_at IS NULL
+             AND (keep_open = 1 OR expires_at > ?)`,
         )
         .get(input.sessionId.toUpperCase(), new Date().toISOString()) as
         | { id: string }
@@ -1004,7 +1017,8 @@ export function getTrackPreviewKey(trackId: string) {
        FROM tracks t
        JOIN sessions s ON s.id = t.session_id
        WHERE t.id = ? AND t.preview_key IS NOT NULL
-         AND s.ended_at IS NULL AND s.expires_at > ?`,
+          AND s.ended_at IS NULL
+          AND (s.keep_open = 1 OR s.expires_at > ?)`,
     )
     .get(trackId, new Date().toISOString()) as
     | { preview_key: string }
@@ -1028,7 +1042,8 @@ export function getTrackProviderRef(trackId: string) {
        WHERE t.id = ?
          AND t.provider IS NOT NULL AND t.provider_track_id IS NOT NULL
          AND t.permalink_url IS NOT NULL
-         AND s.ended_at IS NULL AND s.expires_at > ?`,
+          AND s.ended_at IS NULL
+          AND (s.keep_open = 1 OR s.expires_at > ?)`,
     )
     .get(trackId, new Date().toISOString()) as
     | { provider: string; provider_track_id: string; host_account_id: string }

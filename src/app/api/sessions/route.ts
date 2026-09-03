@@ -95,6 +95,7 @@ export async function POST(request: Request) {
       requestId?: unknown;
       cashAppHandle?: unknown;
       venmoHandle?: unknown;
+      keepOpen?: unknown;
     };
 
     const name = typeof body.name === "string" ? body.name.trim() : "";
@@ -220,6 +221,7 @@ export async function POST(request: Request) {
       venue: venue.slice(0, 80),
       accountId: account.id,
       requestId,
+      keepOpen: body.keepOpen === true,
       tipHandles,
       tracks,
     });

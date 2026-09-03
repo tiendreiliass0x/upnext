@@ -35,18 +35,21 @@ function seedRoom(input: {
   createdAt: string;
   expiresAt: string;
   endedAt?: string | null;
+  keepOpen?: boolean;
 }) {
   getDatabase()
     .prepare(
       `INSERT INTO sessions
-        (id, name, venue, host_account_id, host_key, revision, created_at, expires_at, ended_at)
-       VALUES (?, 'Room', '', 'host', ?, 0, ?, ?, ?)`,
+        (id, name, venue, host_account_id, host_key, revision, created_at,
+         expires_at, keep_open, ended_at)
+       VALUES (?, 'Room', '', 'host', ?, 0, ?, ?, ?, ?)`,
     )
     .run(
       input.id,
       `key-${input.id}`,
       input.createdAt,
       input.expiresAt,
+      input.keepOpen ? 1 : 0,
       input.endedAt ?? null,
     );
 }
@@ -186,6 +189,24 @@ describe("cleanup", () => {
           .get() as { ended_at: string | null }
       ).ended_at,
     ).toBe(now.toISOString());
+  });
+
+  it("leaves an opted-in room live after its normal expiry", async () => {
+    seedRoom({
+      id: "KEEPOP",
+      createdAt: ago(24 * 30),
+      expiresAt: ago(24 * 29),
+      keepOpen: true,
+    });
+
+    const summary = await runCleanup({ now });
+
+    expect(summary).toMatchObject({ closedRooms: 0, deletedRooms: 0 });
+    expect(
+      getDatabase()
+        .prepare("SELECT ended_at FROM sessions WHERE id = 'KEEPOP'")
+        .get(),
+    ).toEqual({ ended_at: null });
   });
 
   it("keeps an unattached upload inside the grace period", async () => {

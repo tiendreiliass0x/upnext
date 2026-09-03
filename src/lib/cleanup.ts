@@ -65,7 +65,7 @@ export async function runCleanup(options: { now?: Date } = {}) {
   // that expired without anyone ending them, which is the normal case.
   const retiredRooms = `
     (ended_at IS NOT NULL AND ended_at <= @roomCutoff)
-    OR expires_at <= @roomCutoff
+    OR (keep_open = 0 AND expires_at <= @roomCutoff)
   `;
 
   database
@@ -73,7 +73,7 @@ export async function runCleanup(options: { now?: Date } = {}) {
       summary.closedRooms = database
         .prepare(
           `UPDATE sessions SET ended_at = @nowIso
-           WHERE ended_at IS NULL AND expires_at <= @nowIso`,
+           WHERE ended_at IS NULL AND keep_open = 0 AND expires_at <= @nowIso`,
         )
         .run({ nowIso }).changes;
 

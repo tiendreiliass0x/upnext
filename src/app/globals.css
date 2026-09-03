@@ -430,6 +430,79 @@ button:active:not(:disabled) {
   display: none;
 }
 
+.session-lifetime-toggle {
+  margin-top: 18px;
+  padding-top: 18px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+}
+
+.session-lifetime-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.toggle-track {
+  width: 42px;
+  height: 24px;
+  padding: 3px;
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--surface-raised);
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.toggle-track > span {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--muted);
+  transition: transform 160ms ease, background-color 160ms ease;
+}
+
+.session-lifetime-toggle input:checked + .toggle-track {
+  border-color: var(--ink);
+  background: var(--accent);
+}
+
+.session-lifetime-toggle input:checked + .toggle-track > span {
+  background: var(--accent-ink);
+  transform: translateX(18px);
+}
+
+.session-lifetime-toggle input:focus-visible + .toggle-track {
+  outline: 2px solid color-mix(in srgb, var(--accent) 85%, var(--ink));
+  outline-offset: 2px;
+}
+
+.session-lifetime-toggle:has(input:disabled) {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.toggle-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.toggle-copy strong {
+  font-size: 13px;
+}
+
+.toggle-copy small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .tip-ready {
   width: fit-content;
   margin-top: 10px;

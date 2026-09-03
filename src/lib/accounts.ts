@@ -206,8 +206,8 @@ export function updateAccountPseudonym(account: StoredAccount, pseudonym: string
     database
       .prepare(
         `UPDATE sessions SET revision = revision + 1
-         WHERE ended_at IS NULL AND expires_at > ?
-            AND (
+         WHERE ended_at IS NULL AND (keep_open = 1 OR expires_at > ?)
+             AND (
               host_account_id = ?
               OR id IN (SELECT session_id FROM votes WHERE account_id = ?)
             )`,

@@ -13,6 +13,7 @@ import {
   GET as getRoom,
 } from "@/app/api/sessions/[id]/route";
 import { POST as vote } from "@/app/api/sessions/[id]/vote/route";
+import { getDatabase } from "@/lib/db";
 import { setupTestDatabase } from "./helpers/database";
 
 setupTestDatabase();
@@ -533,6 +534,29 @@ describe("session API", () => {
       context(created.session.id),
     );
     expect(missingTrack.status).toBe(404);
+  });
+
+  it("persists the host's choice to keep a room open", async () => {
+    const host = await register("+32470000035", "All Night DJ");
+    const response = await createRoom(
+      request("http://localhost/api/sessions", {
+        method: "POST",
+        token: host.token,
+        body: {
+          name: "All Night",
+          keepOpen: true,
+          tracks: [{ title: "Track", artist: "Artist" }],
+        },
+      }),
+    );
+    const created = await body<{ session: { id: string } }>(response);
+
+    expect(response.status).toBe(201);
+    expect(
+      getDatabase()
+        .prepare("SELECT keep_open FROM sessions WHERE id = ?")
+        .get(created.session.id),
+    ).toEqual({ keep_open: 1 });
   });
 
   it("claims a browser's free vote when phone onboarding completes", async () => {

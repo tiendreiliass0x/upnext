@@ -1037,6 +1037,11 @@ describe("external tips", () => {
     await user.click(
       await screen.findByRole("button", { name: "Add entire library" }),
     );
+    const keepOpen = screen.getByRole("checkbox", {
+      name: /keep session live until i end it/i,
+    });
+    expect(keepOpen).not.toBeChecked();
+    await user.click(keepOpen);
     const cashApp = await screen.findByLabelText(/Cash App/i);
     const venmo = screen.getByLabelText(/Venmo/i);
     await user.type(cashApp, "$DJOwl");
@@ -1047,6 +1052,7 @@ describe("external tips", () => {
     expect(creationBody).toMatchObject({
       cashAppHandle: "$DJOwl",
       venmoHandle: "@dj-owl",
+      keepOpen: true,
     });
     expect(JSON.parse(window.localStorage.getItem("upnext-tip-handles") ?? "null")).toEqual({
       cashAppHandle: "$DJOwl",

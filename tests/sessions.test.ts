@@ -594,4 +594,38 @@ describe("sessions", () => {
       }),
     ).toBeNull();
   });
+
+  it("keeps an opted-in room live past 24 hours until its host ends it", () => {
+    const host = account("+32470000022", "Long Set Host");
+    const guest = account("+32470000023", "Long Set Guest");
+    const created = createSession({
+      name: "Long Set",
+      venue: "Room 03",
+      accountId: host.id,
+      requestId: "long-set-room",
+      keepOpen: true,
+      tracks: [{ title: "First", artist: "Artist A" }],
+    });
+    getDatabase()
+      .prepare("UPDATE sessions SET expires_at = ? WHERE id = ?")
+      .run("2000-01-01T00:00:00.000Z", created.session.id);
+
+    expect(getSession(created.session.id)?.id).toBe(created.session.id);
+    expect(getActiveHostSession(host.id)?.session.id).toBe(created.session.id);
+    expect(
+      toggleVote({
+        sessionId: created.session.id,
+        trackId: created.session.tracks[0].id,
+        accountId: guest.id,
+      })?.voted,
+    ).toBe(true);
+    expect(
+      endSession({
+        sessionId: created.session.id,
+        hostKey: created.hostKey,
+        accountId: host.id,
+      }),
+    ).toBe("ended");
+    expect(getSession(created.session.id)).toBeNull();
+  });
 });
