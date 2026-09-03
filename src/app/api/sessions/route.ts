@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAccountFromRequest } from "@/lib/auth";
-import { getPublicBaseUrl } from "@/lib/config";
+import { getPublicBaseUrl, maximumDraftTracks } from "@/lib/config";
 import { getAccessToken, guardProviderRequest } from "@/lib/connections";
 import { getProvider, isProviderId } from "@/lib/providers";
 import type { ProviderId, ProviderTrack } from "@/lib/providers/types";
@@ -119,7 +119,7 @@ export async function POST(request: Request) {
           typeof (track as { title?: unknown }).title === "string" &&
           typeof (track as { artist?: unknown }).artist === "string",
       )
-      .slice(0, 200)
+      .slice(0, maximumDraftTracks)
       .map((track) => ({
         title: track.title.trim().slice(0, 120),
         artist: track.artist.trim().slice(0, 120) || "Unknown artist",

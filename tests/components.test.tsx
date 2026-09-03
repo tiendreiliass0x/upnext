@@ -1273,11 +1273,13 @@ describe("now playing", () => {
     const dock = await screen.findByRole("region", { name: "Now playing" }, { timeout: 3000 });
     expect(within(dock).getByText("First Track")).toBeInTheDocument();
     expect(within(dock).getByRole("button", { name: "Listen along" })).toBeEnabled();
-    // The crowd pick is the next song off cooldown; one still cooling cannot be
-    // voted for and says how long it has left.
+    // The crowd pick is the next song off cooldown. The song on now says so
+    // rather than reporting the cooldown its own play just started, and its
+    // vote stays shut until it is off.
     expect(screen.getByText(/Second Track is ranked first/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /vote for first track/i })).toBeDisabled();
-    expect(screen.getByText(/cooldown: 2 more songs/)).toBeInTheDocument();
+    expect(screen.getByText(/· on now/)).toBeInTheDocument();
+    expect(screen.queryByText(/cooldown: 2 more songs/)).not.toBeInTheDocument();
   });
 
   /**
@@ -1830,6 +1832,26 @@ describe("the crowd's now-playing card", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getAllByText("Tip for this pick")).toHaveLength(2);
+  });
+
+  it("offers the DJ no tip when they open their own room by link", async () => {
+    const room = nowPlayingRoom();
+    room.tipLinks = { cashApp: "https://cash.app/$DJOwl", venmo: null };
+    room.tipEligibleTrackIds = ["track-one", "track-two"];
+    // No host key is issued on the share-link path, so the room itself has to
+    // say who is reading it.
+    room.viewerIsHost = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: room })),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    expect(
+      await screen.findByRole("button", { name: "Listen to Second Track" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Tip for this pick")).not.toBeInTheDocument();
   });
 
   it("offers the DJ no tip on the room they host", async () => {

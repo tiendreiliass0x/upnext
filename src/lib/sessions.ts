@@ -1,3 +1,4 @@
+import { sessionLifetimeMs } from "@/lib/config";
 import { getDatabase } from "@/lib/db";
 import { avatarUrlFor } from "@/lib/profile";
 import type { ProviderId } from "@/lib/providers/types";
@@ -85,6 +86,13 @@ export type PublicSession = {
   votedTrackIds: string[];
   /** Saved picks that may still be tipped after their vote was spent by a play. */
   tipEligibleTrackIds?: string[];
+  /**
+   * Whether the account reading this payload hosts the room. Says nothing
+   * about anyone else, so it is safe in a body every guest receives, and it
+   * answers the question a host key cannot: a DJ who opened their own room
+   * through the share link holds no key in that tab but is still the host.
+   */
+  viewerIsHost?: boolean;
   anonymousVoteUsed: boolean;
   nowPlaying: NowPlaying | null;
   /**
@@ -99,6 +107,7 @@ export type PublicSession = {
 type SessionRow = {
   id: string;
   name: string;
+  host_account_id: string;
   dj_name: string;
   dj_avatar_key: string | null;
   dj_tagline: string;
@@ -301,8 +310,6 @@ function trackSource(track: TrackRow): TrackSource | null {
   };
 }
 
-const sessionLifetime = 24 * 60 * 60 * 1000;
-
 function createSessionId() {
   const database = getDatabase();
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -333,7 +340,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
   return database.transaction(() => {
     const session = database
       .prepare(
-        `SELECT s.id, s.name, a.pseudonym AS dj_name,
+        `SELECT s.id, s.name, s.host_account_id, a.pseudonym AS dj_name,
                 a.avatar_key AS dj_avatar_key, a.tagline AS dj_tagline,
                 s.cash_app_handle,
                 s.venmo_handle, s.venue, s.created_at,
@@ -424,6 +431,7 @@ function getPublicSession(sessionId: string, accountId?: string) {
       guestCount: totals.guest_count,
       votedTrackIds,
       tipEligibleTrackIds: accountVotes.map((vote) => vote.track_id),
+      viewerIsHost: Boolean(accountId) && session.host_account_id === accountId,
       anonymousVoteUsed: false,
       voters: getRoomVoters(session.id),
       nowPlaying:
@@ -526,7 +534,7 @@ export function createSession(input: {
     const id = createSessionId();
     const hostKey = crypto.randomUUID();
     const createdAt = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + sessionLifetime).toISOString();
+    const expiresAt = new Date(Date.now() + sessionLifetimeMs).toISOString();
     database
       .prepare(
         `INSERT INTO sessions
@@ -641,6 +649,8 @@ export function getAnonymousSession(id: string, voterId: string) {
     // the song has not played since, so the guest can re-tap it afterwards.
     votedTrackIds: rows.filter((row) => row.live).map((row) => row.track_id),
     tipEligibleTrackIds: rows.map((row) => row.track_id),
+    // Nobody hosts a room from a browser that has never signed in.
+    viewerIsHost: false,
     anonymousVoteUsed: claimed || rows.length > 0,
   };
 }

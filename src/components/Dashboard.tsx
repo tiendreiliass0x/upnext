@@ -38,7 +38,12 @@ import {
 } from "lucide-react";
 import QRCode from "react-qr-code";
 import type { PublicAccount } from "@/lib/accounts";
-import { classifyGuestOrigin, type GuestOriginReach } from "@/lib/config";
+import {
+  classifyGuestOrigin,
+  maximumDraftTracks,
+  sessionLifetimeHours,
+  type GuestOriginReach,
+} from "@/lib/config";
 import { fetchWithTimeout, readJson } from "@/lib/http-client";
 import type { Library, LibraryTrack } from "@/lib/libraries";
 import { maximumAvatarBytes } from "@/lib/images";
@@ -71,7 +76,7 @@ type DraftTrack = {
   id: string;
   title: string;
   artist: string;
-  source: "upload" | "playlist" | "library" | "soundcloud";
+  source: "upload" | "playlist" | "library" | ProviderId;
   file?: File;
   previewKey?: string;
   // Set only for a row picked from a connected service. The server re-reads
@@ -761,7 +766,7 @@ export default function Dashboard({
         }
         setSessionName(data.playlist.name.slice(0, 80));
         setDraftTracks(
-          data.tracks.slice(0, 200).map((track) => ({
+          data.tracks.slice(0, maximumDraftTracks).map((track) => ({
             id: track.id,
             title: track.title,
             artist: track.artist,
@@ -1135,9 +1140,31 @@ export default function Dashboard({
         return true;
       });
 
-      return [...current, ...uniqueIncoming].slice(0, 200);
+      return [...current, ...uniqueIncoming].slice(0, maximumDraftTracks);
     });
-    setError("");
+    setError(draftCapNotice(incoming.length, draftTracks));
+  }
+
+  /**
+   * What to tell the DJ after an add that could not take everything offered.
+   *
+   * `offered` arriving at the cap means the source itself stopped there — a
+   * library or playlist longer than a room holds — which is worth saying even
+   * when the draft had room for all of it. Counted against the draft as this
+   * render sees it: the write below is a functional update and stays correct
+   * either way, and only the wording could lag a second add landing in the
+   * same tick.
+   */
+  function draftCapNotice(offered: number, existing: DraftTrack[]) {
+    const room = Math.max(0, maximumDraftTracks - existing.length);
+    if (offered > room) {
+      const dropped = offered - room;
+      return `A room holds ${maximumDraftTracks} songs, so ${dropped} of these were not added.`;
+    }
+    if (offered >= maximumDraftTracks) {
+      return `Added the first ${maximumDraftTracks} songs, which is what one room holds.`;
+    }
+    return "";
   }
 
   function addLibraryTracks(picked: LibraryTrack[]) {
@@ -1160,9 +1187,9 @@ export default function Dashboard({
           previewKey: track.libraryPreviewKey ?? undefined,
         });
       }
-      return [...current, ...additions].slice(0, 200);
+      return [...current, ...additions].slice(0, maximumDraftTracks);
     });
-    setError("");
+    setError(draftCapNotice(picked.length, draftTracks));
   }
 
   function addProviderTracks(picked: ProviderTrack[], provider: ProviderId) {
@@ -1180,7 +1207,7 @@ export default function Dashboard({
           id: key,
           title: track.title,
           artist: track.artist,
-          source: "soundcloud",
+          source: provider,
           provider,
           providerTrackId: track.providerTrackId,
           artworkUrl: track.artworkUrl,
@@ -1188,9 +1215,9 @@ export default function Dashboard({
           uploaderName: track.uploaderName,
         });
       }
-      return [...current, ...additions].slice(0, 200);
+      return [...current, ...additions].slice(0, maximumDraftTracks);
     });
-    setError("");
+    setError(draftCapNotice(picked.length, draftTracks));
   }
 
   async function startSession() {
@@ -1266,6 +1293,16 @@ export default function Dashboard({
       if (!sessionRequestIdRef.current) {
         sessionRequestIdRef.current = createClientId();
       }
+      // The route re-reads every imported row from the provider before the
+      // room exists, a few lookups at a time, so this POST is not the small
+      // JSON round trip the 8s default is sized for. A whole playlist past
+      // that deadline aborts a request the server goes on to finish, leaving
+      // the DJ on the setup form for a room that is already live. The retry
+      // stays safe either way: requestId is held until a room comes back, and
+      // the route answers a repeat with the room it already made.
+      const importedTracks = preparedTracks.filter(
+        (track) => track.providerTrackId,
+      ).length;
       const response = await fetchWithTimeout("/api/sessions", {
         method: "POST",
         headers: {
@@ -1292,7 +1329,7 @@ export default function Dashboard({
             }),
           ),
         }),
-      });
+      }, Math.min(30_000 + importedTracks * 1_000, 5 * 60_000));
       const data = (await response.json()) as {
         session?: PublicSession;
         hostKey?: string;
@@ -1934,6 +1971,9 @@ export function LibraryPicker({
   const [isLoading, setIsLoading] = useState(false);
   const [isAddingLibrary, setIsAddingLibrary] = useState(false);
   const [pickerError, setPickerError] = useState("");
+  // "Add entire library" outlives this component when the DJ starts the session
+  // mid-request, so it asks before reporting back.
+  const mountedRef = useRef(true);
 
   useEffect(() => {
     if (!accountToken) return;
@@ -1960,6 +2000,10 @@ export function LibraryPicker({
     };
   }, [accountToken]);
 
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
   useEffect(() => {
     if (!accountToken || !libraryId) {
       setTracks([]);
@@ -1970,6 +2014,9 @@ export function LibraryPicker({
     const timer = window.setTimeout(() => {
       void (async () => {
         setIsLoading(true);
+        // This load owns the error slate from the moment it starts. Clearing
+        // on success instead would wipe what a slower add just reported.
+        setPickerError("");
         try {
           const response = await fetchWithTimeout(
             `/api/libraries/${encodeURIComponent(libraryId)}/tracks?q=${encodeURIComponent(query)}`,
@@ -1985,10 +2032,7 @@ export function LibraryPicker({
           if (!response.ok || !data.tracks) {
             throw new Error(data.error || "The library could not be read.");
           }
-          if (!cancelled) {
-            setTracks(data.tracks);
-            setPickerError("");
-          }
+          if (!cancelled) setTracks(data.tracks);
         } catch (error) {
           if (!cancelled) setPickerError(getErrorMessage(error));
         } finally {
@@ -2004,6 +2048,13 @@ export function LibraryPicker({
 
   async function addEntireLibrary() {
     if (!libraryId || isAddingLibrary) return;
+    // With no search term the debounced load above already holds every row a
+    // reload would return, so the common path costs no round trip.
+    if (!query.trim() && tracks.length > 0) {
+      onAdd(tracks);
+      setPicked(new Set());
+      return;
+    }
     setIsAddingLibrary(true);
     setPickerError("");
     try {
@@ -2020,6 +2071,7 @@ export function LibraryPicker({
       if (!response.ok || !data.tracks) {
         throw new Error(data.error || "The library could not be read.");
       }
+      if (!mountedRef.current) return;
       if (data.tracks.length === 0) {
         setPickerError("This library has no songs.");
         return;
@@ -2027,9 +2079,9 @@ export function LibraryPicker({
       onAdd(data.tracks);
       setPicked(new Set());
     } catch (error) {
-      setPickerError(getErrorMessage(error));
+      if (mountedRef.current) setPickerError(getErrorMessage(error));
     } finally {
-      setIsAddingLibrary(false);
+      if (mountedRef.current) setIsAddingLibrary(false);
     }
   }
 
@@ -2395,7 +2447,8 @@ function DJSetup({
                   <span className="toggle-copy">
                     <strong>Keep session live until I end it</strong>
                     <small>
-                      Otherwise, this session closes automatically after 24 hours.
+                      Otherwise, this session closes automatically after{" "}
+                      {sessionLifetimeHours} hours.
                     </small>
                   </span>
                 </label>
@@ -2675,7 +2728,11 @@ function DJLiveRoom({
 type GuestRoomProps = {
   session: PublicSession;
   isPreview: boolean;
-  /** True while the DJ reads their own room from the crowd's side. */
+  /**
+   * Whether this tab holds the room's host key. Only half the answer — a DJ
+   * who opened their own room through the share link holds none — so it is
+   * read together with the room's own view of who is looking.
+   */
   isHost: boolean;
   isLoading: boolean;
   votedTrackIds: Set<string>;
@@ -3326,10 +3383,12 @@ function GuestRoom({
   const hasTipLinks = Boolean(
     session.tipLinks?.cashApp || session.tipLinks?.venmo,
   );
-  // Only someone who is actually in the crowd is offered the action: the DJ on
-  // this side of their own room would be tipping themselves, and the preview
-  // has no room to tip into yet.
-  const tippingEnabled = hasTipLinks && !isHost && !isPreview;
+  // Only someone who is actually in the crowd is offered the action: a DJ on
+  // this side of their own room would be tipping themselves, whether they got
+  // here from the booth or by opening their own link, and the preview has no
+  // room to tip into yet.
+  const tippingEnabled =
+    hasTipLinks && !isHost && !session.viewerIsHost && !isPreview;
   const nowPlayingTrackId = session.nowPlaying?.trackId;
   const nowPlayingTrack = nowPlayingTrackId
     ? session.tracks.find((track) => track.id === nowPlayingTrackId)
@@ -3435,6 +3494,7 @@ function GuestRoom({
           <QueueList
             tracks={session.tracks}
             interactive={!isPreview}
+            nowPlayingTrackId={nowPlayingTrackId ?? null}
             votedTrackIds={votedTrackIds}
             tipEligibleTrackIds={rowTipTrackIds}
             pendingVotes={pendingVotes}
@@ -3836,11 +3896,13 @@ export function QueueList({
               <strong>{track.title}</strong>
               <small>
                 {track.artist}
-                {cooling
-                  ? ` · cooldown: ${track.cooldown} more song${track.cooldown === 1 ? "" : "s"}`
-                  : played && !onNow
-                    ? " · played"
-                    : ""}
+                {onNow
+                  ? " · on now"
+                  : cooling
+                    ? ` · cooldown: ${track.cooldown} more song${track.cooldown === 1 ? "" : "s"}`
+                    : played
+                      ? " · played"
+                      : ""}
                 {onPlay && !track.previewUrl ? " · no audio" : ""}
               </small>
               <TrackAttribution source={track.source} />
@@ -3861,7 +3923,9 @@ export function QueueList({
                 type="button"
                 className={`vote-button ${hasVote ? "has-vote" : ""}`}
                 onClick={() => onVote?.(track.id)}
-                disabled={cooling || isPending || (lockSelectedVotes && hasVote)}
+                disabled={
+                  cooling || onNow || isPending || (lockSelectedVotes && hasVote)
+                }
                 aria-label={`${hasVote ? lockSelectedVotes ? "Vote saved for" : "Remove vote from" : "Vote for"} ${track.title}, ${track.votes} ${track.votes === 1 ? "vote" : "votes"}`}
                 aria-pressed={hasVote}
               >

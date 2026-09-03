@@ -38,6 +38,19 @@ function room(accountId: string, requestId = crypto.randomUUID()) {
 }
 
 describe("sessions", () => {
+  it("tells each reader whether they host the room, and nobody else", () => {
+    const host = account("+32470000094", "DJ Owl");
+    const guest = account("+32470000095", "Fan");
+    const created = room(host.id);
+
+    // The host reading their own room, however they arrived at it: a share
+    // link issues no host key, so this is what the crowd view has to go on.
+    expect(getSession(created.session.id, host.id)?.viewerIsHost).toBe(true);
+    expect(getSession(created.session.id, guest.id)?.viewerIsHost).toBe(false);
+    // A signed-out reader is nobody's host, and learns nothing about who is.
+    expect(getSession(created.session.id)?.viewerIsHost).toBe(false);
+  });
+
   it("identifies the DJ on the public room", () => {
     const host = account("+32470000096", "DJ Owl");
     const created = createSession({

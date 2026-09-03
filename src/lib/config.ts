@@ -55,3 +55,19 @@ export function classifyGuestOrigin(value: string): GuestOriginReach {
 
   return "public";
 }
+
+/**
+ * How long a room stays reachable when the DJ has not asked to hold it open.
+ *
+ * The setup screen promises this number to the DJ and the room is stamped with
+ * it at creation, so both read it here rather than each writing out a day in
+ * their own units.
+ */
+export const sessionLifetimeHours = 24;
+export const sessionLifetimeMs = sessionLifetimeHours * 60 * 60 * 1000;
+
+/**
+ * How many songs one room holds. The setup screen stops the draft here and the
+ * launch route stops again on what it is sent, so the number belongs to both.
+ */
+export const maximumDraftTracks = 200;

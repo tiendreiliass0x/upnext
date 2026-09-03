@@ -69,6 +69,9 @@ export default function SourcePicker({
   const [isConnecting, setIsConnecting] = useState(false);
   const [pickerError, setPickerError] = useState("");
   const pollRef = useRef<number | null>(null);
+  // The add handlers below outlive their own component when the DJ starts the
+  // session mid-request, so they ask before reporting back.
+  const mountedRef = useRef(true);
 
   const authHeaders = useCallback(
     () => ({ Authorization: `Bearer ${accountToken}` }),
@@ -143,6 +146,10 @@ export default function SourcePicker({
     };
   }, [accountToken, connected]);
 
+  useEffect(() => () => {
+    mountedRef.current = false;
+  }, []);
+
   // Tracks follow the chosen playlist, debounced exactly like the library
   // search beside it so typing does not fire a request per keystroke.
   useEffect(() => {
@@ -154,6 +161,7 @@ export default function SourcePicker({
     const timer = window.setTimeout(() => {
       void (async () => {
         setIsLoading(true);
+        setPickerError("");
         try {
           const response = await fetchWithTimeout(
             `/api/connections/${connected.provider}/playlists/${encodeURIComponent(playlistId)}/tracks?q=${encodeURIComponent(query)}`,
@@ -165,10 +173,7 @@ export default function SourcePicker({
           if (!response.ok || !data.tracks) {
             throw new Error(data.error || "Those songs could not be read.");
           }
-          if (!cancelled) {
-            setTracks(data.tracks);
-            setPickerError("");
-          }
+          if (!cancelled) setTracks(data.tracks);
         } catch (error) {
           if (!cancelled) setPickerError(getErrorMessage(error));
         } finally {
@@ -279,6 +284,13 @@ export default function SourcePicker({
 
   async function addEntirePlaylist() {
     if (!connected || !playlistId || isAddingPlaylist) return;
+    // With no search term the debounced load above already holds every row a
+    // reload would return, so the common path costs the provider nothing.
+    if (!query.trim() && tracks.length > 0) {
+      onAdd(tracks, connected.provider);
+      setPicked(new Set());
+      return;
+    }
     setIsAddingPlaylist(true);
     setPickerError("");
     try {
@@ -294,6 +306,7 @@ export default function SourcePicker({
       if (!response.ok || !data.tracks) {
         throw new Error(data.error || "Those songs could not be read.");
       }
+      if (!mountedRef.current) return;
       if (data.tracks.length === 0) {
         setPickerError("This playlist has no playable songs.");
         return;
@@ -301,9 +314,9 @@ export default function SourcePicker({
       onAdd(data.tracks, connected.provider);
       setPicked(new Set());
     } catch (error) {
-      setPickerError(getErrorMessage(error));
+      if (mountedRef.current) setPickerError(getErrorMessage(error));
     } finally {
-      setIsAddingPlaylist(false);
+      if (mountedRef.current) setIsAddingPlaylist(false);
     }
   }
 
