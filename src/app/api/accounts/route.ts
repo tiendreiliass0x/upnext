@@ -6,9 +6,10 @@ import {
   getAccountByPhone,
   normalizePhone,
   toPublicAccount,
-  updateAccountPseudonym,
+  updateAccountProfile,
   voterLinkedElsewhereMessage,
 } from "@/lib/accounts";
+import { pseudonymError, taglineError } from "@/lib/profile";
 import { getAccountFromRequest } from "@/lib/auth";
 import {
   getClientAddress,
@@ -30,6 +31,74 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({ account: toPublicAccount(account) });
+}
+
+/**
+ * Edit the profile of the account this token belongs to. Distinct from POST,
+ * which is the sign-up form and identifies an account by its phone number: a
+ * rename has to prove it owns the account, not merely know the number.
+ *
+ * Fields are optional and independent, so the form can send the one it
+ * touched. Whatever the caller sends, phone and token are not on the list —
+ * they are the credential, not the profile.
+ */
+export async function PATCH(request: Request) {
+  const account = getAccountFromRequest(request);
+  if (!account) {
+    return NextResponse.json({ error: "Sign in to continue." }, { status: 401 });
+  }
+
+  let body: { pseudonym?: unknown; tagline?: unknown };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return NextResponse.json(
+      { error: "Your profile could not be saved." },
+      { status: 400 },
+    );
+  }
+  // A body of literal `null` parses fine and is not an object; reading a field
+  // off it would throw outside the try above.
+  if (!body || typeof body !== "object") {
+    return NextResponse.json(
+      { error: "Your profile could not be saved." },
+      { status: 400 },
+    );
+  }
+
+  const changes: { pseudonym?: string; tagline?: string } = {};
+  if (body.pseudonym !== undefined) {
+    if (typeof body.pseudonym !== "string") {
+      return NextResponse.json(
+        { error: "Your username has to be text." },
+        { status: 400 },
+      );
+    }
+    const message = pseudonymError(body.pseudonym);
+    if (message) return NextResponse.json({ error: message }, { status: 400 });
+    changes.pseudonym = body.pseudonym;
+  }
+  if (body.tagline !== undefined) {
+    if (typeof body.tagline !== "string") {
+      return NextResponse.json(
+        { error: "Your tagline has to be text." },
+        { status: 400 },
+      );
+    }
+    const message = taglineError(body.tagline);
+    if (message) return NextResponse.json({ error: message }, { status: 400 });
+    changes.tagline = body.tagline;
+  }
+
+  try {
+    const updated = updateAccountProfile(account, changes);
+    return NextResponse.json({ account: toPublicAccount(updated) });
+  } catch {
+    return NextResponse.json(
+      { error: "Your profile could not be saved." },
+      { status: 500 },
+    );
+  }
 }
 
 export async function POST(request: Request) {
@@ -55,11 +124,9 @@ export async function POST(request: Request) {
       );
     }
 
-    if (pseudonym.length < 2 || pseudonym.length > 24) {
-      return NextResponse.json(
-        { error: "Choose a username between 2 and 24 characters." },
-        { status: 400 },
-      );
+    const pseudonymMessage = pseudonymError(pseudonym);
+    if (pseudonymMessage) {
+      return NextResponse.json({ error: pseudonymMessage }, { status: 400 });
     }
 
     const anonymousVoterId = getAnonymousVoterId(request);
@@ -112,7 +179,7 @@ export async function POST(request: Request) {
     }
 
     const account = existing
-      ? updateAccountPseudonym(existing, pseudonym)
+      ? updateAccountProfile(existing, { pseudonym })
       : createAccount({
           phone,
           pseudonym,

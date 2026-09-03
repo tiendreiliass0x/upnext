@@ -293,16 +293,16 @@ a played track (409), since a guest's ballot can be up to one poll behind.
 
 ## Who Voted
 
-Each row shows the faces behind its live votes: an initial in a colour derived
-from the pseudonym for every account vote, a blank bubble for every anonymous
-free vote, a `+N` for the rest, and a sentence — *"Amyr, Nathan and 171
-others"*. The server sends up to twenty voters per track, named ones first
+Each row shows the faces behind its live votes: the voter's profile picture,
+or an initial in a colour derived from the pseudonym when they have not set
+one, a blank bubble for every anonymous free vote, a `+N` for the rest, and a
+sentence — *"Amyr, Nathan and 171 others"*. The server sends up to twenty voters per track, named ones first
 (anonymous ones are all the same bubble, so a run of them would say nothing),
 and the phone shows as many faces as fit its width — measured, not guessed —
 folding the rest into the `+N`. Nothing that identifies a voter beyond the
-pseudonym they chose to show is sent:
-no account IDs, and never the anonymous voter ID, which is what entitles a
-browser to its free vote. Votes spent by a play take their faces with them.
+pseudonym and picture they chose to show is
+sent: no account IDs — not even inside a picture's URL — and never the
+anonymous voter ID, which is what entitles a browser to its free vote. Votes spent by a play take their faces with them.
 
 The booth's **Crowd queue** header and the guest page's **Make your picks**
 header carry the room-wide stack: one face per
@@ -331,6 +331,36 @@ reaches the dev server through the tunnel. The window is therefore sized for
 a room's first quarter hour, and a login that succeeds gives its slot back:
 enumerating numbers is paid for in misses, and a crowd's real logins are not
 misses.
+
+## Your Profile
+
+The chip in the header opens the profile: username, an optional one-line
+tagline, and a picture. The username is the name on every room the account
+hosts and beside every vote it casts; the tagline appears under the room's
+title, where a guest meets the DJ. The phone number is shown as its last four
+digits and is not editable here — it is the login credential, not a display
+name.
+
+Pictures are PNG, JPEG, WebP or GIF up to 2 MB, stored in R2 exactly as
+uploaded. Nothing re-encodes or resizes them, so the ceiling is enforced at each step:
+in the form, so a phone on venue wifi is told before it spends a minute
+uploading; against the declared upload size, which the route requires (a
+request that declares none is refused, since the body is buffered whole); and
+against the file itself. The route decides the format from the file's leading
+bytes rather than its name or the type the browser claimed. SVG is refused —
+it is a document that can carry script and the bytes are served back under this
+app's own origin.
+
+A picture is read through `/api/avatars/<name>`, which redirects to a
+short-lived signed URL. The name is a random one and carries no account ID, so
+the URL that rides along in a room's payload identifies a picture and not a
+person; a new picture gets a new name, which is what lets a browser cache one
+hard. Replacing or removing a picture deletes the object it replaces, so
+avatars need no quota and `bun run cleanup` has nothing to reap.
+
+Editing a profile bumps the revision of every live room the account hosts or
+has voted in. Guests poll with a revision-keyed ETag, so without that they
+would keep hearing `304` and showing the old name and picture.
 
 ## Tips For A Pick
 

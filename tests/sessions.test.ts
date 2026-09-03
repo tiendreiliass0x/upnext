@@ -488,7 +488,7 @@ describe("sessions", () => {
     expect(track.votes).toBe(3);
     // Named faces lead; the two account votes may share a timestamp.
     expect(track.voters.slice(0, 2).map((voter) => voter.name).sort()).toEqual(["Amyr", "Nathan"]);
-    expect(track.voters[2]).toEqual({ name: null });
+    expect(track.voters[2]).toEqual({ name: null, avatarUrl: null });
     expect(JSON.stringify(track)).not.toContain("secret-voter");
     expect(JSON.stringify(track)).not.toContain(amyr.id);
 
@@ -515,7 +515,10 @@ describe("sessions", () => {
     let current = getSession(created.session.id)!;
     expect(current.totalVotes).toBe(3);
     expect(current.guestCount).toBe(2);
-    expect(current.voters).toEqual([{ name: "Amyr" }, { name: null }]);
+    expect(current.voters).toEqual([
+      { name: "Amyr", avatarUrl: null },
+      { name: null, avatarUrl: null },
+    ]);
     expect(JSON.stringify(current.voters)).not.toContain("anon-voter-01");
 
     for (let index = 0; index < roomVoterPreviewLimit + 3; index += 1) {
@@ -524,7 +527,7 @@ describe("sessions", () => {
     current = getSession(created.session.id)!;
     expect(current.guestCount).toBe(roomVoterPreviewLimit + 5);
     expect(current.voters).toHaveLength(roomVoterPreviewLimit);
-    expect(current.voters[0]).toEqual({ name: "Amyr" });
+    expect(current.voters[0]).toEqual({ name: "Amyr", avatarUrl: null });
   });
 
   it("caps the faces per row and leaves the rest to the count", () => {

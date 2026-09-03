@@ -34,6 +34,7 @@ and here is the evidence" does.
 | # | Doc | Status |
 |---|-----|--------|
 | 0001 | [Connected music accounts](0001-connected-music-accounts.md) | Accepted |
+| 0002 | [Profile pictures and the name beside a vote](0002-profile-pictures.md) | Accepted |
 
 ## Worth writing next
 

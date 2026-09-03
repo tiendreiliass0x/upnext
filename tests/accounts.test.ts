@@ -5,7 +5,7 @@ import {
   getAccountByToken,
   normalizePhone,
   toPublicAccount,
-  updateAccountPseudonym,
+  updateAccountProfile,
 } from "@/lib/accounts";
 import { getAccountFromRequest } from "@/lib/auth";
 import { createSession, getSession, toggleVote } from "@/lib/sessions";
@@ -33,6 +33,8 @@ describe("accounts", () => {
       id: account.id,
       pseudonym: "Night Owl",
       phoneLast4: "3456",
+      avatarUrl: null,
+      tagline: "",
     });
     expect(toPublicAccount(account)).not.toHaveProperty("authToken");
     expect(toPublicAccount(account)).not.toHaveProperty("phone");
@@ -43,7 +45,7 @@ describe("accounts", () => {
       phone: "+32470987654",
       pseudonym: "Old Name",
     });
-    const updated = updateAccountPseudonym(account, "Mint Fox");
+    const updated = updateAccountProfile(account, { pseudonym: "Mint Fox" });
 
     expect(updated.authToken).toBe(account.authToken);
     expect(getAccountByToken(account.authToken)?.pseudonym).toBe("Mint Fox");
@@ -85,7 +87,7 @@ describe("renaming while in a room", () => {
     });
     const before = getSession(created.session.id)!;
 
-    updateAccountPseudonym(host, "New DJ");
+    updateAccountProfile(host, { pseudonym: "New DJ" });
 
     const after = getSession(created.session.id)!;
     expect(after.djName).toBe("New DJ");
@@ -114,15 +116,19 @@ describe("renaming while in a room", () => {
     });
     const before = getSession(votedIn.session.id)!;
     const untouchedBefore = getSession(notVotedIn.session.id)!.revision;
-    expect(before.tracks[0].voters).toEqual([{ name: "Old Name" }]);
+    expect(before.tracks[0].voters).toEqual([
+      { name: "Old Name", avatarUrl: null },
+    ]);
 
-    updateAccountPseudonym(fan, "New Name");
+    updateAccountProfile(fan, { pseudonym: "New Name" });
 
     const after = getSession(votedIn.session.id)!;
     // A guest polling with the old ETag now gets a body instead of a 304.
     expect(after.revision).toBe(before.revision + 1);
-    expect(after.tracks[0].voters).toEqual([{ name: "New Name" }]);
-    expect(after.voters).toEqual([{ name: "New Name" }]);
+    expect(after.tracks[0].voters).toEqual([
+      { name: "New Name", avatarUrl: null },
+    ]);
+    expect(after.voters).toEqual([{ name: "New Name", avatarUrl: null }]);
     // Rooms the account never voted in are left alone.
     expect(getSession(notVotedIn.session.id)!.revision).toBe(untouchedBefore);
   });
