@@ -1364,6 +1364,13 @@ button:active:not(:disabled) {
   position: relative;
 }
 
+/* The input itself is one transparent pixel, so the outline the browser
+   draws on it cannot be seen. The label it hides behind wears the focus. */
+.profile-picture-actions label:focus-within {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
 .profile-picture-actions label.is-disabled {
   opacity: 0.45;
   cursor: not-allowed;

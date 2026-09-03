@@ -342,12 +342,16 @@ digits and is not editable here — it is the login credential, not a display
 name.
 
 Pictures are PNG, JPEG, WebP or GIF up to 2 MB, stored in R2 exactly as
-uploaded. Nothing re-encodes or resizes them, so the ceiling is enforced at each step:
-in the form, so a phone on venue wifi is told before it spends a minute
-uploading; against the declared upload size, which the route requires (a
-request that declares none is refused, since the body is buffered whole); and
-against the file itself. The route decides the format from the file's leading
-bytes rather than its name or the type the browser claimed. SVG is refused —
+uploaded. The form shrinks a picture to 512 pixels on its long side before sending it,
+so a phone camera's original costs neither the person uploading it nor the
+guests who load it. Nothing on the server re-encodes, so its limits are the
+backstop: the declared upload size, which the route requires (a request that
+declares none is refused, since the body is buffered whole); the file's own
+size; and the pixel size read out of its header, because a solid
+10000×10000 PNG fits comfortably under 2 MB and still asks every guest's phone
+for hundreds of megabytes to draw one small circle. The route decides the
+format from the file's leading bytes rather than its name or the type the
+browser claimed. SVG is refused —
 it is a document that can carry script and the bytes are served back under this
 app's own origin.
 
@@ -355,8 +359,11 @@ A picture is read through `/api/avatars/<name>`, which redirects to a
 short-lived signed URL. The name is a random one and carries no account ID, so
 the URL that rides along in a room's payload identifies a picture and not a
 person; a new picture gets a new name, which is what lets a browser cache one
-hard. Replacing or removing a picture deletes the object it replaces, so
-avatars need no quota and `bun run cleanup` has nothing to reap.
+hard. The route serves a name only while it is still some account's current
+picture, so a URL kept from before a removal stops working even if deleting
+the object itself failed. Replacing or removing a picture deletes the object
+it replaces, so avatars need no quota and `bun run cleanup` has nothing to
+reap.
 
 Editing a profile bumps the revision of every live room the account hosts or
 has voted in. Guests poll with a revision-keyed ETag, so without that they

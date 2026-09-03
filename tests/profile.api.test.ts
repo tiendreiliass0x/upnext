@@ -19,16 +19,29 @@ import {
   POST as postAvatar,
 } from "@/app/api/accounts/avatar/route";
 import { GET as getAvatar } from "@/app/api/avatars/[name]/route";
-import { createAccount, getAccountByToken } from "@/lib/accounts";
+import {
+  createAccount,
+  getAccountByToken,
+  setAccountAvatar,
+} from "@/lib/accounts";
 import { resetRateLimits } from "@/lib/rate-limit";
 import { castAnonymousVote, createSession, getSession, toggleVote } from "@/lib/sessions";
 import { setupTestDatabase } from "./helpers/database";
 
 setupTestDatabase();
 
-const pngBytes = new Uint8Array([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 0, 0, 0, 0,
-]);
+/** A PNG header stating a real pixel size, which the route now reads. */
+function pngHeader(width = 512, height = 512) {
+  const bytes = new Uint8Array(24);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  bytes.set([0, 0, 0, 0x0d, 0x49, 0x48, 0x44, 0x52], 8);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(16, width);
+  view.setUint32(20, height);
+  return bytes;
+}
+
+const pngBytes = pngHeader();
 
 function signUp(phone: string, pseudonym = "Night Owl") {
   return createAccount({ phone, pseudonym });
@@ -66,9 +79,13 @@ function avatarRequest(
   });
 }
 
-function pngFile(name = "me.png", size = pngBytes.length) {
-  const body = new Uint8Array(size);
-  body.set(pngBytes.slice(0, Math.min(size, pngBytes.length)));
+function pngFile(
+  name = "me.png",
+  size = pngBytes.length,
+  header = pngBytes,
+) {
+  const body = new Uint8Array(Math.max(size, header.length));
+  body.set(header);
   return new File([Buffer.from(body)], name, { type: "image/png" });
 }
 
@@ -302,6 +319,63 @@ describe("a profile picture", () => {
     expect(r2Mocks.deletePreview).not.toHaveBeenCalled();
   });
 
+  it("refuses a picture that is cheap to send and ruinous to draw", async () => {
+    const account = signUp("+32470000420");
+
+    // A solid 10000x10000 PNG sits well under the byte ceiling and asks every
+    // guest's browser for hundreds of megabytes to decode one small circle.
+    const bomb = pngFile("bomb.png", 4096, pngHeader(10_000, 10_000));
+    const response = await postAvatar(avatarRequest(account.authToken, bomb));
+
+    expect(response.status).toBe(413);
+    expect((await json<AccountBody>(response)).error).toMatch(/pixels on a side/);
+    expect(r2Mocks.uploadPreview).not.toHaveBeenCalled();
+
+    // A picture a phone actually takes still goes through.
+    const photo = pngFile("photo.png", 4096, pngHeader(4032, 3024));
+    expect((await postAvatar(avatarRequest(account.authToken, photo))).status).toBe(200);
+  });
+
+  it("names the key it actually replaced, not the one the request arrived with", async () => {
+    const account = signUp("+32470000421");
+    await postAvatar(avatarRequest(account.authToken, pngFile()));
+    const first = getAccountByToken(account.authToken)!.avatarKey!;
+
+    // A second upload carrying the pre-first snapshot, as a racing request
+    // would. The replaced key has to be what the row actually held.
+    const stale = { ...account, avatarKey: null, avatarUrl: null };
+    const { replacedKey } = setAccountAvatar(stale, "avatars/replacement.png");
+
+    expect(replacedKey).toBe(first);
+  });
+
+  it("stops serving a picture once it is no longer anyone's", async () => {
+    const account = signUp("+32470000422");
+    await postAvatar(avatarRequest(account.authToken, pngFile()));
+    const name = getAccountByToken(account.authToken)!.avatarUrl!.split("/").pop()!;
+
+    expect(
+      (await getAvatar(new Request("http://test"), {
+        params: Promise.resolve({ name }),
+      })).status,
+    ).toBe(307);
+
+    // The object delete is best effort and can fail; the route must not keep
+    // signing reads for a key nothing points at any more.
+    r2Mocks.deletePreview.mockRejectedValueOnce(new Error("R2 unavailable"));
+    await deleteAvatar(
+      new Request("http://test/api/accounts/avatar", {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${account.authToken}` },
+      }),
+    );
+
+    const after = await getAvatar(new Request("http://test"), {
+      params: Promise.resolve({ name }),
+    });
+    expect(after.status).toBe(404);
+  });
+
   it("needs a token to change or drop a picture", async () => {
     expect((await postAvatar(avatarRequest(null, pngFile()))).status).toBe(401);
     const removal = await deleteAvatar(
@@ -338,8 +412,10 @@ describe("a profile picture", () => {
     expect(JSON.stringify(room)).not.toContain(fan.id);
   });
 
-  it("serves a well-formed picture name and refuses anything else", async () => {
-    const name = `${crypto.randomUUID()}.png`;
+  it("serves a current picture name and refuses anything else", async () => {
+    const account = signUp("+32470000423");
+    await postAvatar(avatarRequest(account.authToken, pngFile()));
+    const name = getAccountByToken(account.authToken)!.avatarUrl!.split("/").pop()!;
 
     const found = await getAvatar(new Request("http://test"), {
       params: Promise.resolve({ name }),
@@ -349,7 +425,13 @@ describe("a profile picture", () => {
     expect(found.headers.get("cache-control")).toMatch(/^private, max-age=\d+$/);
     expect(r2Mocks.getPreviewUrl).toHaveBeenCalledWith(`avatars/${name}`);
 
-    for (const bad of ["../../secrets.env", "anything.mp3", `${crypto.randomUUID()}.svg`]) {
+    // Malformed, and well-formed but nobody's: both are simply not found.
+    for (const bad of [
+      "../../secrets.env",
+      "anything.mp3",
+      `${crypto.randomUUID()}.svg`,
+      `${crypto.randomUUID()}.png`,
+    ]) {
       const response = await getAvatar(new Request("http://test"), {
         params: Promise.resolve({ name: bad }),
       });
@@ -359,10 +441,13 @@ describe("a profile picture", () => {
   });
 
   it("answers 502 rather than a broken redirect when the store is unreachable", async () => {
+    const account = signUp("+32470000424");
+    await postAvatar(avatarRequest(account.authToken, pngFile()));
+    const name = getAccountByToken(account.authToken)!.avatarUrl!.split("/").pop()!;
     r2Mocks.getPreviewUrl.mockRejectedValueOnce(new Error("R2 unavailable"));
 
     const response = await getAvatar(new Request("http://test"), {
-      params: Promise.resolve({ name: `${crypto.randomUUID()}.png` }),
+      params: Promise.resolve({ name }),
     });
 
     expect(response.status).toBe(502);

@@ -2948,6 +2948,57 @@ function TipSheet({
 }
 
 /**
+ * The longest side a picked picture is shrunk to before it is sent.
+ *
+ * A face is drawn at 30 pixels in the header and 72 in the sheet, so this is
+ * already generous, and it is what makes the upload cheap in both directions:
+ * a phone camera's original is several megabytes to send and tens of
+ * megabytes for every guest's browser to decode for one small circle.
+ */
+const avatarUploadSide = 512;
+
+/**
+ * Shrink a picked picture, or hand back the original when this browser
+ * cannot. Canvas is missing in some environments and can refuse to export a
+ * blob; either way the file still goes as chosen and the route's own limits
+ * decide, so this is an optimisation and never the check.
+ */
+export async function prepareAvatarFile(file: File): Promise<File> {
+  if (typeof document === "undefined" || typeof createImageBitmap !== "function") {
+    return file;
+  }
+  let bitmap: ImageBitmap | null = null;
+  try {
+    bitmap = await createImageBitmap(file);
+    const scale = Math.min(
+      1,
+      avatarUploadSide / Math.max(bitmap.width, bitmap.height),
+    );
+    // Already small enough: re-encoding would only lose quality.
+    if (scale >= 1) return file;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+    canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext("2d");
+    if (!context) return file;
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => {
+      if (typeof canvas.toBlob !== "function") {
+        resolve(null);
+        return;
+      }
+      canvas.toBlob((result) => resolve(result), "image/jpeg", 0.9);
+    });
+    if (!blob || blob.size === 0) return file;
+    return new File([blob], "avatar.jpg", { type: "image/jpeg" });
+  } catch {
+    return file;
+  } finally {
+    bitmap?.close();
+  }
+}
+
+/**
  * The profile, as its owner edits it.
  *
  * The picture saves the moment one is picked and the text saves on submit.
@@ -3023,17 +3074,21 @@ function ProfileSheet({
     pseudonym.trim() !== account.pseudonym || tagline.trim() !== account.tagline;
   const isBusy = isSaving || isPictureSaving;
 
-  async function changePicture(file: File | null) {
+  async function changePicture(picked: File | null) {
     setFormError("");
     setNotice("");
-    if (file && file.size > maximumAvatarBytes) {
-      // Refused here rather than after the upload: on venue wifi a phone
-      // camera's original is a minute of waiting for a 413.
-      setFormError("Profile pictures must be smaller than 2 MB.");
-      return;
-    }
     setIsPictureSaving(true);
     try {
+      // Shrunk first: a phone camera's original is several megabytes and far
+      // more pixels than a 72-pixel circle can use, and both cost the guests
+      // who load it as much as the person who sent it.
+      const file = picked ? await prepareAvatarFile(picked) : null;
+      if (file && file.size > maximumAvatarBytes) {
+        // Refused here rather than after the upload: on venue wifi that is a
+        // minute of waiting for a 413.
+        setFormError("Profile pictures must be smaller than 2 MB.");
+        return;
+      }
       await onSaveAvatar(file);
       setNotice(file ? "Picture updated." : "Picture removed.");
     } catch (pictureError) {
@@ -3053,7 +3108,17 @@ function ProfileSheet({
     setFormError("");
     setNotice("");
     try {
-      await onSave({ pseudonym: pseudonym.trim(), tagline: tagline.trim() });
+      // Only what this form actually changed. Sending both every time lets a
+      // tab left open overwrite a field it was never asked to touch, with the
+      // value it happened to load.
+      await onSave({
+        ...(pseudonym.trim() !== account.pseudonym
+          ? { pseudonym: pseudonym.trim() }
+          : {}),
+        ...(tagline.trim() !== account.tagline
+          ? { tagline: tagline.trim() }
+          : {}),
+      });
       setNotice("Profile saved.");
     } catch (saveError) {
       setFormError(getErrorMessage(saveError));

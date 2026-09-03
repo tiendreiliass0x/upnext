@@ -356,7 +356,14 @@ export function getDatabase() {
   database.exec(
     "UPDATE library_tracks SET preview_key = NULL WHERE preview_key LIKE 'previews/%'",
   );
+  // After the ALTER above, not with the other indexes: on a database that
+  // predates avatar_key the column does not exist when that block runs.
   database.exec(`
+    -- The public avatar route asks whether a key is still someone's picture
+    -- before it signs a read, and a room draws a face per vote. Partial:
+    -- most accounts have no picture and those rows are never the answer.
+    CREATE INDEX IF NOT EXISTS accounts_avatar_key_idx
+      ON accounts(avatar_key) WHERE avatar_key IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS sessions_host_request_idx
       ON sessions(host_account_id, request_id)
       WHERE request_id IS NOT NULL;

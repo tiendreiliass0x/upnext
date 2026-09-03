@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { setAccountAvatar, toPublicAccount } from "@/lib/accounts";
 import { getAccountFromRequest } from "@/lib/auth";
-import { maximumAvatarBytes, sniffImageFormat } from "@/lib/images";
+import {
+  imageHeaderBytes,
+  imageSizeError,
+  maximumAvatarBytes,
+  readImageHeader,
+} from "@/lib/images";
 import { avatarObjectKey } from "@/lib/profile";
 import { deletePreview, uploadPreview } from "@/lib/r2";
 import { rateLimitedResponse, takeRateLimit } from "@/lib/rate-limit";
@@ -78,21 +83,28 @@ export async function POST(request: Request) {
     // The bytes decide the format, not the name or the type the browser
     // claimed: this is what keeps an SVG or an HTML page out of a bucket
     // whose objects are served back under a URL of ours.
-    const format = sniffImageFormat(
-      new Uint8Array(await file.slice(0, 16).arrayBuffer()),
+    const header = readImageHeader(
+      new Uint8Array(await file.slice(0, imageHeaderBytes).arrayBuffer()),
     );
-    if (!format) {
+    if (!header) {
       return NextResponse.json(
         { error: "Use a PNG, JPEG, WebP or GIF image." },
         { status: 415 },
       );
     }
+    // Bytes bound what a picture costs to store and send; pixels bound what
+    // it costs every guest's phone to draw. A file can be small on all three
+    // of the checks above and still be a decompression bomb.
+    const sizeMessage = imageSizeError(header);
+    if (sizeMessage) {
+      return NextResponse.json({ error: sizeMessage }, { status: 413 });
+    }
 
-    uploadedObjectKey = avatarObjectKey(format.extension);
+    uploadedObjectKey = avatarObjectKey(header.extension);
     await uploadPreview(
       uploadedObjectKey,
       Buffer.from(await file.arrayBuffer()),
-      format.contentType,
+      header.contentType,
     );
     const { account: updated, replacedKey } = setAccountAvatar(
       account,
