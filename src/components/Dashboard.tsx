@@ -1855,6 +1855,7 @@ export default function Dashboard({
         <GuestRoom
           session={session ?? previewSession}
           isPreview={!activeSessionId}
+          isHost={Boolean(hostKey)}
           isLoading={isLoadingSession}
           votedTrackIds={votedTrackIds}
           pendingVotes={pendingVotes}
@@ -2575,6 +2576,8 @@ function DJLiveRoom({
 type GuestRoomProps = {
   session: PublicSession;
   isPreview: boolean;
+  /** True while the DJ reads their own room from the crowd's side. */
+  isHost: boolean;
   isLoading: boolean;
   votedTrackIds: Set<string>;
   pendingVotes: Set<string>;
@@ -2868,6 +2871,7 @@ function TipSheet({
 function GuestRoom({
   session,
   isPreview,
+  isHost,
   isLoading,
   votedTrackIds,
   pendingVotes,
@@ -2909,16 +2913,24 @@ function GuestRoom({
   // Optional chaining, not a type lie: during a rolling deploy this bundle
   // polls instances that predate tipLinks, and a room whose guests see a
   // blank page is worse than one with no tip buttons.
-  const tippingEnabled = Boolean(
+  const hasTipLinks = Boolean(
     session.tipLinks?.cashApp || session.tipLinks?.venmo,
   );
-  const tipEligibleTrackIds = new Set(
-    session.tipEligibleTrackIds ?? session.votedTrackIds,
-  );
+  // Only someone who is actually in the crowd is offered the action: the DJ on
+  // this side of their own room would be tipping themselves, and the preview
+  // has no room to tip into yet.
+  const tippingEnabled = hasTipLinks && !isHost && !isPreview;
   const nowPlayingTrackId = session.nowPlaying?.trackId;
   const nowPlayingTrack = nowPlayingTrackId
     ? session.tracks.find((track) => track.id === nowPlayingTrackId)
     : undefined;
+  // Saved picks whose ballot row still carries a tip. The song on now is left
+  // out: the card above the ballot already offers that tip, and two buttons
+  // opening the same sheet read as two separate tips.
+  const rowTipTrackIds = new Set(
+    session.tipEligibleTrackIds ?? session.votedTrackIds,
+  );
+  if (nowPlayingTrackId) rowTipTrackIds.delete(nowPlayingTrackId);
   if (isLoading) return <LoadingRoom label="Joining the room" />;
 
   const topTrack = session.tracks.find((track) => track.cooldown === 0);
@@ -2999,7 +3011,7 @@ function GuestRoom({
             tracks={session.tracks}
             interactive={!isPreview}
             votedTrackIds={votedTrackIds}
-            tipEligibleTrackIds={tipEligibleTrackIds}
+            tipEligibleTrackIds={rowTipTrackIds}
             pendingVotes={pendingVotes}
             lockSelectedVotes={isAnonymous}
             onVote={onVote}

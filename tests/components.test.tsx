@@ -1709,6 +1709,74 @@ describe("the crowd's now-playing card", () => {
     expect(within(dialog).getByText("Artist B")).toBeInTheDocument();
   });
 
+  it("leaves the tip on the card, not twice, for the song on now", async () => {
+    const room = nowPlayingRoom();
+    room.tipLinks = { cashApp: "https://cash.app/$DJOwl", venmo: null };
+    room.tipEligibleTrackIds = ["track-one", "track-two"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ session: room })),
+    );
+
+    render(<Dashboard initialSessionId="ABC123" />);
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Open tip options for now playing Second Track by Artist B",
+      }),
+    ).toBeInTheDocument();
+    // The card above the ballot already carries track-two's tip, so its row
+    // stays quiet rather than opening the same sheet from two buttons.
+    expect(
+      screen.queryByRole("button", {
+        name: "Open tip options for Second Track by Artist B, row 2",
+      }),
+    ).not.toBeInTheDocument();
+    // A saved pick that is not on now keeps its row button.
+    expect(
+      screen.getByRole("button", {
+        name: "Open tip options for First Track by Artist A, row 1",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("Tip for this pick")).toHaveLength(2);
+  });
+
+  it("offers the DJ no tip on the room they host", async () => {
+    const user = userEvent.setup();
+    const room = nowPlayingRoom();
+    room.tipLinks = { cashApp: "https://cash.app/$DJOwl", venmo: null };
+    room.tipEligibleTrackIds = ["track-one", "track-two"];
+    window.localStorage.setItem("upnext-account-token", "host-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/accounts") {
+          return Response.json({
+            account: { id: "host", pseudonym: "DJ Owl", phoneLast4: "1234" },
+          });
+        }
+        if (url === "/api/sessions") {
+          return Response.json({
+            activeRoom: { session: room, hostKey: "host-key" },
+            guestBaseUrl: "https://upnext.example",
+          });
+        }
+        return Response.json({ session: room });
+      }),
+    );
+
+    render(<Dashboard />);
+
+    await user.click(
+      await screen.findByRole("button", { name: "Crowd view" }, { timeout: 3000 }),
+    );
+
+    // The room is live, not a preview, but the tip links are the DJ's own.
+    expect(await screen.findByText("Live · DJ Owl Radio")).toBeInTheDocument();
+    expect(screen.queryByText("Tip for this pick")).not.toBeInTheDocument();
+  });
+
   it("goes quiet when the room has played past the preview", async () => {
     vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
     vi.spyOn(HTMLMediaElement.prototype, "pause").mockImplementation(() => {});
