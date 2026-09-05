@@ -9,6 +9,7 @@ import Dashboard, {
   NowPlayingDock,
   QueueList,
   facesThatFit,
+  sessionUploadHeaders,
 } from "@/components/Dashboard";
 import { previewSeconds } from "@/lib/preview";
 import type { PublicSession, SessionTrack } from "@/lib/sessions";
@@ -57,6 +58,25 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+describe("session upload credentials", () => {
+  it("forwards the stored admin token with account-owned uploads", () => {
+    window.localStorage.setItem("upnext-admin-token", "super-admin");
+
+    expect(sessionUploadHeaders("account-token", "upload-1")).toEqual({
+      Authorization: "Bearer account-token",
+      "x-upnext-upload-id": "upload-1",
+      "x-upnext-admin-token": "super-admin",
+    });
+  });
+
+  it("keeps ordinary session uploads account-only", () => {
+    expect(sessionUploadHeaders("account-token", "upload-1")).toEqual({
+      Authorization: "Bearer account-token",
+      "x-upnext-upload-id": "upload-1",
+    });
+  });
 });
 
 describe("identity onboarding", () => {
