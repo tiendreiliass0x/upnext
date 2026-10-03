@@ -152,6 +152,24 @@ resolve_alias() {
   printf '%s' "$_name"
 }
 
+# `nvm alias default 24` is legal, so the chain can end on a partial version
+# ("24", "22.20") or on a floating name, while the directory under versions/node
+# is always a full version. Widen whatever the alias says to the newest
+# installed match, which is the same version nvm itself would select.
+newest_installed() {
+  case ${1#v} in
+    '' | node | stable | latest | '*') _re='^[0-9]' ;;
+    *) _re="^$(printf '%s' "${1#v}" | sed 's/\./\\./g')([.]|$)" ;;
+  esac
+  # No pipefail here, so an empty grep just yields an empty result rather than
+  # tripping `set -e`.
+  ls -1 "$NVM_ROOT/versions/node" 2>/dev/null |
+    sed -n 's/^v//p' |
+    grep -E "$_re" |
+    sort -t. -k1,1n -k2,2n -k3,3n |
+    tail -1
+}
+
 version_ok() {
   [ -x "$1" ] || return 1
   _v=$("$1" --version 2>/dev/null) || return 1
@@ -168,9 +186,13 @@ version_ok() {
 
 NODE_BIN=""
 TARGET=$(resolve_alias default)
+RESOLVED=""
 if [ -n "$TARGET" ]; then
-  CANDIDATE="$NVM_ROOT/versions/node/v${TARGET#v}/bin/node"
-  if version_ok "$CANDIDATE"; then NODE_BIN="$CANDIDATE"; fi
+  RESOLVED=$(newest_installed "$TARGET")
+  if [ -n "$RESOLVED" ]; then
+    CANDIDATE="$NVM_ROOT/versions/node/v$RESOLVED/bin/node"
+    if version_ok "$CANDIDATE"; then NODE_BIN="$CANDIDATE"; fi
+  fi
 fi
 
 # Only accept a PATH node if it also meets the minimum. An older one on PATH
@@ -187,6 +209,11 @@ if [ -z "$NODE_BIN" ]; then
   ping_monitor "/fail"
   echo "upnext-cleanup: no Node >= $MIN_MAJOR.$MIN_MINOR found; cleanup did NOT run." >&2
   echo "  nvm default alias : ${TARGET:-<unset>}" >&2
+  if [ -n "$RESOLVED" ]; then
+    echo "  resolved install  : v$RESOLVED" >&2
+  else
+    echo "  resolved install  : nothing under $NVM_ROOT/versions/node matches '${TARGET:-<unset>}'" >&2
+  fi
   echo "  looked under      : $NVM_ROOT/versions/node" >&2
   echo "  node on PATH      : $(command -v node 2>/dev/null || echo none)" >&2
   exit 1
